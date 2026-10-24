@@ -26,11 +26,12 @@ is decided by planar distance, so both vintages and the parcels must be in
 one projected coordinate system, in feet or in metres. Nothing is written
 without --apply.
 
-Exit codes: 0 every parcel that exists in both vintages was decided
-(STABLE, RETRACED or CHANGED), 1 at least one parcel is in the REVIEW band
-and a human has to decide it, 2 a file could not be read or written, 3 the
-input was refused (it cannot support an answer), 4 nothing was compared, 64
-usage error, 70 an unexpected crash, which is never a finding.
+Exit codes: 0 every parcel was decided (STABLE, RETRACED or CHANGED), 1 at
+least one parcel is in the REVIEW band and a human has to decide it, 2 a file
+could not be read or written, 3 the input was refused (it cannot support an
+answer), 4 nothing was compared, 5 at least one parcel has no answer
+(UNVERIFIED) and none is in the REVIEW band, 64 usage error, 70 an unexpected
+crash, which is never a finding. --out names a file that does not exist yet.
 """
 
 from __future__ import print_function
@@ -115,7 +116,8 @@ def _is_finite(value):
     """
     try:
         return not (math.isnan(value) or math.isinf(value))
-    except TypeError:
+    except (TypeError, OverflowError):
+        # An integer too large for a float (over about 1e308) is no coordinate.
         return False
 
 
@@ -372,7 +374,9 @@ def parse_vintage(data, name, zone_field=DEFAULT_ZONE_FIELD,
         raise Refused(
             "%s: exceededTransferLimit is true, so the server stopped at its "
             "record limit and some zones are missing. Page the query with "
-            "resultOffset until the flag is false, then try again." % name)
+            "resultOffset until the flag is false, join the features of "
+            "every page into one list under one feature set, and read that "
+            "file. A page read alone leaves zones out." % name)
     sr = data.get("spatialReference")
     zones = []
     has_subtype = False
@@ -492,7 +496,8 @@ def classify_shift(shift, retrace=DEFAULT_RETRACE_DISTANCE,
         raise ValueError("need 0 <= retrace distance <= change distance, "
                          "both finite")
     if shift <= retrace:
-        return RETRACED, ("the line moved at most %.1f %s: not a zone change"
+        return RETRACED, ("the line would have to move at most %.1f %s: "
+                          "counted as a moved line, not a zone change"
                           % (retrace, units))
     if shift > change:
         if math.isinf(shift):
@@ -545,10 +550,17 @@ def compare(parcels, old, new, retrace=DEFAULT_RETRACE_DISTANCE,
 
 
 def gate(report):
-    """The exit code for a report."""
+    """The exit code for a report.
+
+    4 nothing was compared, 1 a parcel is in the REVIEW band, 5 a parcel has
+    no answer, 0 every parcel was decided. A run that could not tell for a
+    parcel is never a clean run.
+    """
     if report.compared == 0:
         return 4
-    return 1 if report.count(REVIEW) else 0
+    if report.count(REVIEW):
+        return 1
+    return 5 if report.count(UNVERIFIED) else 0
 
 
 def _shift_text(result, units):
@@ -561,7 +573,8 @@ def describe(report, sample=DEFAULT_SAMPLE, overlap_hint=""):
     """The printed report, as a list of lines."""
     lines = list(report.notes)
     total = len(report.results)
-    lines.append("parcels classified: %d of %d" % (total, total))
+    lines.append("parcels read: %d, compared in both vintages: %d"
+                 % (total, report.compared))
     for cls in CLASSES:
         lines.append("  %-10s %d" % (cls, report.count(cls)))
     lines.append("retrace distance %.1f %s, change distance %.1f %s"
@@ -598,8 +611,8 @@ def describe(report, sample=DEFAULT_SAMPLE, overlap_hint=""):
     section("zone changes the geometry confirms, worst first:", CHANGED)
     section("zone differences in the band between, for a human to look at:",
             REVIEW)
-    section("zone differences that are a re-traced line, not a change:",
-            RETRACED)
+    section("zone differences within the retrace distance, counted as a moved "
+            "line:", RETRACED)
     unverified = [r for r in report.results if r.cls == UNVERIFIED]
     if unverified:
         lines.append("")
@@ -612,14 +625,22 @@ def describe(report, sample=DEFAULT_SAMPLE, overlap_hint=""):
             lines.append("  ... and %d more" % (len(unverified) - sample))
     lines.append("")
     if report.count(REVIEW):
-        lines.append("VERDICT: %d parcel(s) in the review band. Decide them "
-                     "before a change count is published."
-                     % report.count(REVIEW))
+        verdict = ("VERDICT: %d parcel(s) in the review band. Decide them "
+                   "before a change count is published."
+                   % report.count(REVIEW))
+    elif report.differing == 0:
+        verdict = ("VERDICT: 0 parcel(s) changed zone. No compared parcel "
+                   "has a different zone in the two vintages.")
     else:
-        lines.append("VERDICT: %d parcel(s) changed zone. %d of the %d zone "
-                     "difference(s) were a re-traced line and are not "
-                     "changes." % (report.count(CHANGED),
-                                   report.count(RETRACED), report.differing))
+        verdict = ("VERDICT: %d parcel(s) changed zone. %d of the %d zone "
+                   "difference(s) are within the retrace distance and are "
+                   "counted as a moved line, not as a zone change."
+                   % (report.count(CHANGED), report.count(RETRACED),
+                      report.differing))
+    if unverified:
+        verdict += (" %d of %d parcel(s) have no answer and are in none of "
+                    "these counts." % (len(unverified), total))
+    lines.append(verdict)
     return lines
 
 
@@ -716,7 +737,9 @@ def looks_like_degrees(vintages, parcels):
 
 
 def _write_csv(path, columns, rows):
-    with open(path, "w", newline="", encoding="utf-8") as handle:
+    # "x" fails if the file exists, so a file made after the check in _run is
+    # not overwritten either.
+    with open(path, "x", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(columns))
         writer.writeheader()
         for row in rows:
@@ -794,11 +817,6 @@ def _tolerate_odd_characters():
             reconfigure(errors="replace")
 
 
-def _same_file(a, b):
-    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
-        os.path.realpath(b))
-
-
 def main(argv=None):
     """Run the CLI. An error this code did not anticipate exits 70, because 1
     is the code a scheduled job reads as 'a parcel needs review'."""
@@ -834,12 +852,12 @@ def _run(argv):
     if args.apply and not args.out:
         print("error: --apply needs --out.", file=sys.stderr)
         return 64
-    if args.out and any(_same_file(args.out, p)
-                        for p in (args.old, args.new, args.parcels)):
-        # Checked on a dry run too: the run that would replace an input
-        # should say so before --apply is added, not after.
-        print("error: --out %s is also an input. Name a new file." % args.out,
-              file=sys.stderr)
+    if args.out and os.path.lexists(args.out):
+        # Checked on a dry run too: the run that would replace a file should
+        # say so before --apply is added, not after. Any existing path is
+        # refused: an input, a link to an input, a directory, a stranger's file.
+        print("error: --out %s already exists. Name a file that does not "
+              "exist yet." % args.out, file=sys.stderr)
         return 64
 
     try:
@@ -1189,6 +1207,126 @@ def _self_test(tmp):
           and "a real change" in classify_shift(500.0)[1]
           and "neither a re-trace" in classify_shift(50.0)[1],
           "each class gives its reason in words")
+    check("not a zone change" in classify_shift(1.0)[1]
+          and "no change" not in classify_shift(1.0)[1].replace("not a zone "
+                                                                "change", ""),
+          "a RETRACED reason says the line would have to move, and counts "
+          "it as a moved line, it does not say nothing changed  "
+          "<-- pinned defect")
+
+    # ---- pins for what the first suite let a mutation sweep break
+    hyp = [(0, 0), (1000, 0), (0, 1000), (0, 0)]
+    check(ring_state(900, 900, [hyp]) == OUTSIDE
+          and ring_state(500, 500, [hyp]) == EDGE
+          and ring_state(100, 100, [hyp]) == INSIDE,
+          "a point beside a diagonal edge is not on it, only a point exactly "
+          "on the line is  <-- pinned defect")
+    stub = [(5, 0), (5, 3), (10, 3), (10, 0)]
+    check(ring_state(5, 4, [stub]) == OUTSIDE
+          and ring_state(10, -1, [stub]) == OUTSIDE
+          and ring_state(15, 0, [stub]) == OUTSIDE
+          and ring_state(0, 3, [stub]) == OUTSIDE
+          and ring_state(5, 3, [stub]) == EDGE,
+          "a point on the extension of an edge is not on the edge, in x or "
+          "in y  <-- pinned defect")
+    parts = [[(1000, 1000), (1000, 1400), (1400, 1400), (1400, 1000)],
+             [(1000, 1600), (1000, 2000), (1400, 2000), (1400, 1600)]]
+    check(ring_state(1000, 1500, parts) == OUTSIDE
+          and ring_state(1000, 1700, parts) == EDGE,
+          "a point in the gap between two parts, level with both of their "
+          "edges, is outside  <-- pinned defect")
+    corner = [(1000, 1000), (2000, 1000), (2000, 2000)]
+    check(ring_state(1050, 1100, [corner]) == OUTSIDE
+          and ring_state(1900, 1500, [corner]) == INSIDE
+          and ring_state(1500, 1500, [corner]) == EDGE,
+          "the closing edge of a ring that is not closed is an edge of the "
+          "ring  <-- pinned defect")
+    diamond = [(1000, 1000), (1100, 1050), (1000, 1100), (900, 1050)]
+    check(ring_state(1030, 1050, [diamond]) == INSIDE
+          and ring_state(920, 1050, [diamond]) == INSIDE
+          and ring_state(1150, 1050, [diamond]) == OUTSIDE
+          and ring_state(880, 1050, [diamond]) == OUTSIDE,
+          "a point level with a vertex is judged the same from both sides of "
+          "it  <-- pinned defect")
+    elbow = [[1000, 0], [2000, 0], [2000, 1000], [1900, 1000], [1900, 100],
+             [1000, 100]]
+    nick = [rect(1505, 480, 1520, 520)]
+    moved = [feat("X", [rect(0, 0, 1495, 1000)]),
+             feat("AE", [rect(1495, 0, 2000, 1000)])]
+    for order in ((nick, [elbow]), ([elbow], nick)):
+        o, n, _ = pair([feat("X", [rect(0, 0, 2000, 1000)]),
+                        feat("AE", order[0]), feat("AE", order[1])], moved)
+        r = one(o, n, 1500, 500)
+        check(r.cls == RETRACED and r.shift == 5.0,
+              "of two polygons of one zone the nearer counts, whichever is "
+              "read first: the elbow is 400 away, the nick 5  "
+              "<-- pinned defect")
+    o, n, notes = pair([feat("X", [rect(0, 0, 2000, 1000)])],
+                       [feat("X", [rect(0, 0, 2000, 1000)], minimal)])
+    check(one(o, n, 500, 500).cls == STABLE and len(notes) == 1,
+          "a subtype in one vintage only does not make the same zone two "
+          "zones  <-- pinned defect")
+    sweep_old = [feat("AE", [rect(0, 0, 2000, 1000)]),
+                 feat("X", [rect(0, 1100, 2000, 1200)])]
+    sweep_new = [feat("AE", [rect(0, 0, 1000, 1000)]),
+                 feat("X", [rect(1000, 0, 2000, 1000)])]
+    o, n, _ = pair(sweep_old, sweep_new)
+    ranked = compare([Parcel("SMALL", 1150, 500, 2),
+                      Parcel("B-late", 1900, 500, 5),
+                      Parcel("B-early", 1900, 501, 3)], o, n)
+    check([r_.parcel.parcel_id for r_ in ranked.results
+           if r_.cls == CHANGED] == ["SMALL", "B-late", "B-early"],
+          "all three are CHANGED, the 600 away one first in the file")
+    listed = [x.split()[0] for x in describe(ranked) if " AE to X" in x]
+    check(listed == ["B-early", "B-late", "SMALL"],
+          "the changes are listed worst first, a tie by file line  "
+          "<-- pinned defect")
+    def shown(rep_, sample):
+        text_ = describe(rep_, sample)
+        return (len([x for x in text_ if " AE to X" in x]),
+                [x for x in text_ if x.startswith("  ... and")])
+
+    check(shown(ranked, 2) == (2, ["  ... and 1 more"])
+          and shown(ranked, 3) == (3, [])
+          and shown(ranked, 0) == (0, ["  ... and 3 more"])
+          and shown(ranked, 9) == (3, []),
+          "--sample lists exactly that many and says how many more, and "
+          "says nothing at an exact fit  <-- pinned defect")
+    none_ = compare([Parcel("U%d" % i, 9000 + i, 9000, i) for i in range(4)]
+                    + [Parcel("S", 500, 500, 9)], o, n)
+
+    def unanswered(sample):
+        text_ = describe(none_, sample)
+        return (len([x for x in text_ if x.startswith("  U") and "line" in x]),
+                [x for x in text_ if x.startswith("  ... and")])
+
+    check(unanswered(2) == (2, ["  ... and 2 more"])
+          and unanswered(4) == (4, []) and unanswered(0) == (0,
+                                                             ["  ... and 4 "
+                                                              "more"]),
+          "--sample cuts the parcels with no answer to exactly that many  "
+          "<-- pinned defect")
+    for dx, dy in ((10, 0), (-10, 0), (0, 10), (0, -10)):
+        o, n, _ = pair([feat("AE", [rect(0, 0, 10, 10)])],
+                       [feat("AE", [rect(dx, dy, dx + 10, dy + 10)])])
+        check(o.bounds() is not None and n.bounds() is not None,
+              "vintages that only touch, at (%d, %d), are one place and are "
+              "not refused  <-- pinned defect" % (dx, dy))
+    for dx, dy in ((11, 0), (-11, 0), (0, 11), (0, -11)):
+        raises(lambda dx=dx, dy=dy: pair(
+            [feat("AE", [rect(0, 0, 10, 10)])],
+            [feat("AE", [rect(dx, dy, dx + 10, dy + 10)])]),
+            "vintages 1 apart at (%d, %d) are refused" % (dx, dy), Refused)
+    wide = parse_vintage(fset([feat("AE", [rect(-180, -1, 180, 1)])]), "v")
+    tall = parse_vintage(fset([feat("AE", [rect(-1, -90, 1, 90)])]), "v")
+    over = parse_vintage(fset([feat("AE", [rect(-1, -1, 1, 90.5)])]), "v")
+    check(looks_like_degrees([wide], []) and looks_like_degrees([tall], [])
+          and not looks_like_degrees([over], []),
+          "a coordinate of exactly 180 or 90 still fits degrees and one past "
+          "it does not  <-- pinned defect")
+    check(not _is_finite(10 ** 400) and not _is_finite(-10 ** 400),
+          "an integer too large for a float is not a coordinate  "
+          "<-- pinned defect")
 
     # ---- the feature sets
     check(sr_ids({"wkid": 102658, "latestWkid": 2236})
@@ -1232,7 +1370,8 @@ def _self_test(tmp):
                     {"rings": [[[0, 0], [1, 1], [2]]]},
                     {"rings": [[[0, 0], [1, 1], [float("nan"), 2]]]},
                     {"rings": [[[0, 0], [1, 1], ["a", 2]]]},
-                    {"rings": [[[0, 0], [1, 1], 7]]}, [rect(0, 0, 1, 1)]]
+                    {"rings": [[[0, 0], [1, 1], 7]]}, [rect(0, 0, 1, 1)],
+                    {"rings": [[[0, 0], [1, 1], [10 ** 400, 2]]]}]
     for geometry in bad_geometry:
         refused(lambda g=geometry: parse_vintage(
             fset([{"attributes": {"FLD_ZONE": "AE"}, "geometry": g}]), "v"),
@@ -1294,7 +1433,11 @@ def _self_test(tmp):
           "report 4 changes")
     check(gate(rep) == 1, "a parcel in the review band is exit 1")
     check(gate(compare([p for p in parcels if p.parcel_id != "V-1"], o, n))
-          == 0, "without it the run is exit 0")
+          == 5, "without it the two parcels with no answer are exit 5, not a "
+          "clean 0  <-- pinned defect")
+    check(gate(compare([p for p in parcels if p.parcel_id
+                        not in ("V-1", "U-1", "U-2")], o, n)) == 0,
+          "and with every parcel decided the run is exit 0")
     check(gate(compare(parcels[4:6], o, n)) == 4,
           "parcels that were all UNVERIFIED are exit 4, not a clean run")
     check(gate(compare([], o, n)) == 4, "no parcels at all is exit 4 as well")
@@ -1310,12 +1453,34 @@ def _self_test(tmp):
     text = "\n".join(describe(compare([p for p in parcels
                                        if p.parcel_id != "V-1"], o, n)))
     check(text.splitlines()[-1] == "VERDICT: 1 parcel(s) changed zone. 2 of "
-          "the 3 zone difference(s) were a re-traced line and are not "
-          "changes.", "the clean verdict counts the real changes")
+          "the 3 zone difference(s) are within the retrace distance and are "
+          "counted as a moved line, not as a zone change. 2 of 6 parcel(s) "
+          "have no answer and are in none of these counts.",
+          "the verdict counts the real changes, calls the retraced ones a "
+          "moved line without saying nothing changed, and names the parcels "
+          "with no answer  <-- pinned defect")
+    check("parcels read: 7, compared in both vintages: 5" in "\n".join(
+        describe(rep)) and "classified" not in "\n".join(describe(rep)),
+          "the header counts the parcels compared, not total over total  "
+          "<-- pinned defect")
+    decided = [p for p in parcels if p.parcel_id not in ("V-1", "U-1", "U-2")]
+    text = "\n".join(describe(compare(decided, o, n)))
+    check("no answer" not in text and text.splitlines()[-1].endswith(
+        "not as a zone change."),
+          "and a run with every parcel decided names none")
+    lopsided = compare([parcels[3]] + [Parcel("U%d" % i, 9000 + i, 9000, i)
+                                       for i in range(99)], o, n)
+    check(gate(lopsided) == 5 and describe(lopsided)[-1].endswith(
+        "99 of 100 parcel(s) have no answer and are in none of these "
+        "counts."),
+          "one parcel decided among 99 with no answer is exit 5 and the "
+          "last line says 99 of 100  <-- pinned defect")
     quiet = "\n".join(describe(compare([parcels[3]], o, n)))
-    check("0 parcel(s) changed zone. 0 of the 0" in quiet
+    check(quiet.splitlines()[-1] == "VERDICT: 0 parcel(s) changed zone. No "
+          "compared parcel has a different zone in the two vintages."
           and "zone changes the geometry" not in quiet,
-          "a run with no difference lists no section")
+          "a run with no difference lists no section and no '0 of the 0'  "
+          "<-- pinned defect")
     check("... and 1 more" in "\n".join(describe(rep, sample=1))
           and "... and 2 more" in "\n".join(describe(rep, sample=0)),
           "a short sample cuts the longer lists and says so")
@@ -1333,6 +1498,9 @@ def _self_test(tmp):
           and rows[3]["shift"] == "" and rows[5]["x"] == ""
           and rows[0]["old_zone"] == "X" and rows[4]["old_zone"] == "",
           "the output has one row per parcel, in file order")
+    check(rows[0]["x"] == "1010" and rows[0]["y"] == "500"
+          and rows[1]["x"] == "1500" and rows[1]["y"] == "1500",
+          "x holds the X coordinate and y the Y  <-- pinned defect")
     gone = compare([Parcel("P", 990, 500, 2)], *pair(
         old_world, [feat("X", [rect(0, 0, 2000, 1000)])])[:2])
     check(classified_rows(gone)[0]["shift"] == ""
@@ -1389,13 +1557,15 @@ def _self_test(tmp):
           "then there is nothing to say")
     code, out, err = run_cli(base + ["--change-distance", "60",
                                      "--units", "m"])
-    check(code == 0 and "VERDICT: 2 parcel(s) changed zone" in out
-          and "70.0 m" in out,
+    check(code == 5 and "VERDICT: 2 parcel(s) changed zone" in out
+          and "70.0 m" in out and out.rstrip().endswith("2 of 6 parcel(s) "
+          "have no answer and are in none of these counts."),
           "a change distance of 60 makes the 70 unit parcel CHANGED, and "
-          "--units relabels without converting")
+          "--units relabels without converting; the two parcels with no "
+          "answer make it exit 5")
     code, out, err = run_cli(base + ["--retrace-distance", "5",
                                      "--change-distance", "5"])
-    check(code == 0 and "R-1  X to AE, 10.0 ft" in out
+    check(code == 5 and "R-1  X to AE, 10.0 ft" in out
           and "VERDICT: 3 parcel(s) changed zone. 0 of the 3" in out,
           "a retrace distance of 5 turns the 10 unit parcel into a change")
     renamed = tmpfile("renamed.csv", csv_text.replace("PARCEL_ID,X,Y",
@@ -1414,6 +1584,7 @@ def _self_test(tmp):
         written = list(csv.DictReader(fh))
     check(code == 1 and ("wrote " + zones_out) in out and len(written) == 6
           and written[0]["class"] == RETRACED
+          and written[0]["x"] == "1010.0" and written[0]["y"] == "500.0"
           and tuple(written[0].keys()) == OUT_COLUMNS,
           "--apply writes one row per parcel with the class")
     for flag in ("--ap", "--appl", "--ou", "--out-"):
@@ -1442,11 +1613,37 @@ def _self_test(tmp):
           "--apply without --out is exit 64")
     for victim in base:
         code, out, err = run_cli(base + ["--out", victim, "--apply"])
-        check(code == 64 and "also an input" in err,
+        check(code == 64 and "already exists" in err,
               "--out naming %s is refused" % os.path.basename(victim))
     with open(parcels_csv, encoding="utf-8") as fh:
         check(fh.read() == csv_text,
               "and the input is untouched  <-- pinned defect")
+    precious = tmpfile("precious.csv", "PRECIOUS\n")
+    for flags in (["--apply"], []):
+        code, out, err = run_cli(base + ["--out", precious] + flags)
+        with open(precious, encoding="utf-8") as fh:
+            check(code == 64 and "already exists" in err
+                  and fh.read() == "PRECIOUS\n" and "wrote" not in out,
+                  "--out naming any other existing file is refused and the "
+                  "file is untouched, %s  <-- pinned defect"
+                  % ("with --apply" if flags else "on a dry run"))
+    code, out, err = run_cli(base + ["--out", os.path.join(tmp, ".", "old.json"),
+                                     "--apply"])
+    check(code == 64, "an input spelled with a dot segment is refused too")
+    code, out, err = run_cli(base + ["--out", tmp, "--apply"])
+    check(code == 64 and "already exists" in err,
+          "a directory is not a new file either")
+    real_lexists = os.path.lexists
+    os.path.lexists = lambda path: False
+    try:
+        code, out, err = run_cli(base + ["--out", precious, "--apply"])
+    finally:
+        os.path.lexists = real_lexists
+    with open(precious, encoding="utf-8") as fh:
+        check(code == 2 and "could not write" in err
+              and fh.read() == "PRECIOUS\n",
+              "a file that appears between the check and the write is not "
+              "overwritten either, exit 2")
     code, out, err = run_cli(base + ["--retrace-distance", "50",
                                      "--change-distance", "10"])
     check(code == 64 and "retrace distance" in err,
@@ -1570,7 +1767,8 @@ def _self_test(tmp):
           "both streams are told to replace what they cannot encode")
 
     # ---- a write that fails, and a crash
-    code, out, err = run_cli(base + ["--out", tmp, "--apply"])
+    code, out, err = run_cli(base + ["--out", os.path.join(tmp, "no", "z.csv"),
+                                     "--apply"])
     check(code == 2 and "could not write" in err,
           "a write that fails is exit 2, never the 1 that means review")
     real_compare = globals()["compare"]
