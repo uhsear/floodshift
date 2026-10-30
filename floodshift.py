@@ -280,6 +280,7 @@ class Vintage(object):
         self.zones = zones
         self.sr = sr
         self.has_subtype = has_subtype
+        self.lone = ""
         self.by_key = {}
 
     def index(self, use_subtype):
@@ -305,6 +306,16 @@ class Vintage(object):
                 if zone.state(px, py) != OUTSIDE:
                     keys.add(zone.key)
         return keys
+
+    def subtype_at(self, px, py):
+        """The non-blank subtypes of the zones that hold the point."""
+        found = set()
+        for zone in self.zones:
+            x0, y0, x1, y1 = zone.bbox
+            if (zone.subtype and x0 <= px <= x1 and y0 <= py <= y1
+                    and zone.state(px, py) != OUTSIDE):
+                found.add(zone.subtype)
+        return found
 
     def distance_to(self, key, px, py):
         """Distance to the nearest polygon of this zone key, or inf when this
@@ -394,8 +405,8 @@ def parse_vintage(data, name, zone_field=DEFAULT_ZONE_FIELD,
                           % (name, index, zone_field))
         subtype = ""
         if subtype_field and subtype_field in attrs:
-            has_subtype = True
             subtype = norm(attrs[subtype_field])
+            has_subtype = has_subtype or bool(subtype)
         geometry = feat.get("geometry")
         if not sr and isinstance(geometry, dict):
             sr = geometry.get("spatialReference")
@@ -406,10 +417,14 @@ def parse_vintage(data, name, zone_field=DEFAULT_ZONE_FIELD,
 def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
     """Fix the zone keys of both vintages and return the notes to print.
 
-    A subtype is part of the key only when both vintages carry it. Zone X
-    covers both the shaded and the unshaded hazard areas and only the subtype
-    tells them apart. A subtype present in one vintage and not the other
-    would make every zone differ.
+    A subtype is part of the key only when both vintages carry it, that is,
+    when some feature of each has a non-blank value. Zone X covers both the
+    shaded and the unshaded hazard areas and only the subtype tells them
+    apart. A subtype present in one vintage and not the other would make
+    every zone differ, so it is left out of the key. The vintage that has it
+    is marked, and judge() gives no answer for a parcel whose zone letter
+    matches in a zone that holds a subtype there: the letter alone cannot say
+    that the hazard stayed the same.
 
     Raises Refused when the two vintages declare spatial references that
     share no identifier, or when their extents do not touch.
@@ -417,9 +432,15 @@ def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
     notes = []
     use_subtype = bool(subtype_field) and old.has_subtype and new.has_subtype
     if subtype_field and not use_subtype:
-        notes.append("NOTE      %s is not in both vintages, so it is left out "
-                     "of the zone key and Zone X shaded and unshaded are not "
-                     "told apart" % subtype_field)
+        note = ("NOTE      %s is missing or blank in at least one vintage, so "
+                "it is left out of the zone key and Zone X shaded and "
+                "unshaded are not told apart" % subtype_field)
+        if old.has_subtype != new.has_subtype:
+            (old if old.has_subtype else new).lone = subtype_field
+            note += (". A parcel in the same zone of both vintages is "
+                     "UNVERIFIED where the vintage that has the subtype "
+                     "gives the zone one")
+        notes.append(note)
     old.index(use_subtype)
     new.index(use_subtype)
     a, b = sr_ids(old.sr), sr_ids(new.sr)
@@ -534,6 +555,13 @@ def judge(parcel, old, new, retrace, change, units):
         return Result(parcel, UNVERIFIED, "; ".join(problems))
     a, b = next(iter(keys_old)), next(iter(keys_new))
     if a == b:
+        blind = [which for which, v in (("old", old), ("new", new))
+                 if v.lone and v.subtype_at(parcel.x, parcel.y)]
+        if blind:
+            return Result(parcel, UNVERIFIED,
+                          "the same zone letter in both vintages, but only "
+                          "the %s vintage has a subtype, so a move between "
+                          "subtypes of this zone cannot be seen" % blind[0])
         return Result(parcel, STABLE, "the same zone in both vintages", a, b)
     shift = max(old.distance_to(b, parcel.x, parcel.y),
                 new.distance_to(a, parcel.x, parcel.y))
@@ -582,9 +610,9 @@ def describe(report, sample=DEFAULT_SAMPLE, overlap_hint=""):
                     report.units))
     if report.compared == 0:
         lines.append("")
-        lines.append("VERDICT: NOTHING COMPARED. No parcel was inside exactly "
-                     "one zone of both vintages, so the geometry checked "
-                     "nothing. This is not a clean run.%s" % overlap_hint)
+        lines.append("VERDICT: NOTHING COMPARED. No parcel could be compared "
+                     "in both vintages, so the geometry checked nothing. "
+                     "This is not a clean run.%s" % overlap_hint)
         return lines
     lines.append("")
     lines.append("a plain overlay reports %d parcel(s) changed zone"
@@ -644,17 +672,23 @@ def describe(report, sample=DEFAULT_SAMPLE, overlap_hint=""):
     return lines
 
 
+def _cell(text):
+    """Text for a spreadsheet cell. A leading = + - or @ is read as a formula,
+    so it gets a leading apostrophe. Numbers are not passed through here."""
+    return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+
+
 def classified_rows(report):
     """The --out rows, one per parcel."""
     rows = []
     for r in report.results:
         rows.append({
-            "parcel_id": r.parcel.parcel_id,
+            "parcel_id": _cell(r.parcel.parcel_id),
             "line": r.parcel.line,
             "x": "" if r.parcel.x is None else repr(r.parcel.x),
             "y": "" if r.parcel.y is None else repr(r.parcel.y),
-            "old_zone": label(r.old_key) if r.old_key else "",
-            "new_zone": label(r.new_key) if r.new_key else "",
+            "old_zone": _cell(label(r.old_key)) if r.old_key else "",
+            "new_zone": _cell(label(r.new_key)) if r.new_key else "",
             "class": r.cls,
             "shift": ("" if r.shift is None or math.isinf(r.shift)
                       else "%.3f" % r.shift),
@@ -887,7 +921,8 @@ def _run(argv):
         return 2
 
     hint = ""
-    if report.compared == 0 and any(p.x is not None for p in parcels):
+    if report.compared == 0 and any("in no zone" in r.reason
+                                    for r in report.results):
         hint = (" Check that the parcels are in the same coordinate system "
                 "as the zones.")
     print("floodshift: %s %d zone(s), %s %d zone(s), %s %d parcel(s)"
@@ -954,9 +989,11 @@ def _self_test(tmp):
     def rect(x0, y0, x1, y1):
         return [[x0, y0], [x0, y1], [x1, y1], [x1, y0], [x0, y0]]
 
-    def feat(zone, rings, subtype=None):
+    ABSENT = object()
+
+    def feat(zone, rings, subtype=ABSENT):
         attrs = {"FLD_ZONE": zone}
-        if subtype is not None:
+        if subtype is not ABSENT:
             attrs["ZONE_SUBTY"] = subtype
         return {"attributes": attrs, "geometry": {"rings": rings}}
 
@@ -1263,9 +1300,32 @@ def _self_test(tmp):
               "<-- pinned defect")
     o, n, notes = pair([feat("X", [rect(0, 0, 2000, 1000)])],
                        [feat("X", [rect(0, 0, 2000, 1000)], minimal)])
-    check(one(o, n, 500, 500).cls == STABLE and len(notes) == 1,
+    r = one(o, n, 500, 500)
+    check(r.cls == UNVERIFIED and len(notes) == 1
+          and "only the new vintage has a subtype" in r.reason,
           "a subtype in one vintage only does not make the same zone two "
-          "zones  <-- pinned defect")
+          "zones, and the zone letter alone is no answer  <-- pinned defect")
+    o, n, notes = pair([feat("X", [rect(0, 0, 2000, 1000)], minimal)],
+                       [feat("X", [rect(0, 0, 2000, 1000)])])
+    check(one(o, n, 500, 500).cls == UNVERIFIED
+          and "only the old vintage has a subtype" in one(o, n, 500, 500
+                                                          ).reason,
+          "and the same when the old vintage is the one that has it")
+    o, n, notes = pair([feat("AE", [rect(0, 0, 1000, 1000)], ""),
+                        feat("X", [rect(1000, 0, 2000, 1000)], "")],
+                       [feat("AE", [rect(0, 0, 1000, 1000)], ""),
+                        feat("X", [rect(1000, 0, 2000, 1000)], minimal)])
+    check(one(o, n, 500, 500).cls == STABLE
+          and one(o, n, 1500, 500).cls == UNVERIFIED and len(notes) == 1
+          and "UNVERIFIED" in notes[0],
+          "a zone with no subtype in the vintage that has the field is still "
+          "STABLE, and the note says what is UNVERIFIED  <-- pinned defect")
+    o, n, notes = pair([feat("X", [rect(0, 0, 2000, 1000)], None)],
+                       [feat("X", [rect(0, 0, 2000, 1000)], shaded)])
+    check(one(o, n, 500, 500).cls == UNVERIFIED and len(notes) == 1,
+          "a subtype field that is blank on every feature of the older "
+          "vintage is no subtype, so a filled newer one is no false CHANGED  "
+          "<-- pinned defect")
     sweep_old = [feat("AE", [rect(0, 0, 2000, 1000)]),
                  feat("X", [rect(0, 1100, 2000, 1200)])]
     sweep_new = [feat("AE", [rect(0, 0, 1000, 1000)]),
@@ -1371,7 +1431,9 @@ def _self_test(tmp):
                     {"rings": [[[0, 0], [1, 1], [float("nan"), 2]]]},
                     {"rings": [[[0, 0], [1, 1], ["a", 2]]]},
                     {"rings": [[[0, 0], [1, 1], 7]]}, [rect(0, 0, 1, 1)],
-                    {"rings": [[[0, 0], [1, 1], [10 ** 400, 2]]]}]
+                    {"rings": [[[0, 0], [1, 1], [10 ** 400, 2]]]},
+                    {"rings": [[[0, 0], [1, 1], [2, float("nan")]]]},
+                    {"rings": [[[0, 0], [1, 1], [2, float("inf")]]]}]
     for geometry in bad_geometry:
         refused(lambda g=geometry: parse_vintage(
             fset([{"attributes": {"FLD_ZONE": "AE"}, "geometry": g}]), "v"),
@@ -1381,10 +1443,14 @@ def _self_test(tmp):
                                      "geometry": {"rings": [rect(0, 0, 1, 1)],
                                                   "spatialReference":
                                                   {"wkid": 2236}}}]}, "v")
-    check(v.sr == {"wkid": 2236} and v.has_subtype
+    check(v.sr == {"wkid": 2236} and not v.has_subtype
           and v.zones[0].subtype == "",
           "the spatialReference is read from a geometry when the set has "
-          "none, and a null subtype is blank")
+          "none, and a null subtype is blank and carries no subtype")
+    check(parse_vintage(fset([feat("AE", [rect(0, 0, 1, 1)], None),
+                              feat("X", [rect(0, 0, 1, 1)], minimal)]),
+                        "v").has_subtype,
+          "one feature with a value is enough to carry the subtype")
 
     # ---- two vintages that cannot be compared
     refused(lambda: pair(old_world, new_moved, new_wkid=3857),
@@ -1510,6 +1576,46 @@ def _self_test(tmp):
     raises(lambda: compare([], o, n, 50.0, 10.0),
            "compare refuses a change distance under the retrace distance")
 
+    # ---- pins from the mutation sweep of the decision core
+    o, n, _ = pair(old_world, new_moved)
+    check(gate(compare([Parcel("S", 500, 500, 2), Parcel("U", 9000, 9000, 3)],
+                       o, n)) == 5,
+          "exactly one parcel with no answer is exit 5, not a clean 0  "
+          "<-- pinned defect")
+    stacked = [feat("AE", [rect(0, 0, 1000, 1000)]),
+               feat("X", [rect(0, 1000, 1000, 2000)])]
+    o2, n2, _ = pair(stacked, stacked)
+    check(one(o2, n2, 500, 1000).cls == UNVERIFIED
+          and one(o2, n2, 500, 2000).cls == STABLE
+          and one(o2, n2, 500, 0).cls == STABLE,
+          "a point on a horizontal line two zones share is UNVERIFIED, and "
+          "one on the top or bottom edge of the only zone is inside it  "
+          "<-- pinned defect")
+    o2 = parse_vintage(fset(old_world), "old")
+    n2 = parse_vintage({"features": new_moved}, "new")
+    check(any("declares no spatialReference" in x for x in settle(o2, n2)),
+          "a newer vintage with no spatialReference is noted too, not "
+          "refused  <-- pinned defect")
+    o, n, _ = pair(old_world, new_moved)
+    only_retraced = describe(compare([Parcel("R-1", 1010, 500, 2),
+                                      Parcel("S-1", 500, 500, 3)], o, n))
+    check(only_retraced[-1] == "VERDICT: 0 parcel(s) changed zone. 1 of the "
+          "1 zone difference(s) are within the retrace distance and are "
+          "counted as a moved line, not as a zone change.",
+          "a run whose only differences are RETRACED says 0 changed zone and "
+          "that the 1 is a moved line  <-- pinned defect")
+    formula = classified_rows(Report([Result(
+        Parcel("=cmd", 1.5, -2.5, 2), STABLE, "r", ("-AE", ""), ("@X", ""),
+        1.0), Result(Parcel("P-1", 1.0, 2.0, 3), STABLE, "r", ("AE", ""),
+                     ("AE", ""))], 30.0, 100.0, "ft"))
+    check(formula[0]["parcel_id"] == "'=cmd" and formula[0]["old_zone"]
+          == "'-AE" and formula[0]["new_zone"] == "'@X"
+          and formula[0]["x"] == "1.5" and formula[0]["y"] == "-2.5"
+          and formula[1]["parcel_id"] == "P-1",
+          "a parcel id or zone that starts with = + - or @ is written with a "
+          "leading apostrophe, a negative coordinate is not  "
+          "<-- pinned defect")
+
     # ---- the files
     def tmpfile(name, text, mode="w"):
         path = os.path.join(tmp, name)
@@ -1549,10 +1655,11 @@ def _self_test(tmp):
           and "V-1  AH to X, 70.0 ft, line 4" in out,
           "and prints each parcel with its zones, shift and file line")
     check("Check only" not in out, "no --out, no note about writing")
-    check("is not in both vintages" in out, "the layers carry no subtype, "
-          "and the run says the key is the zone letter alone")
+    check("is missing or blank in at least one vintage" in out,
+          "the layers carry no subtype, and the run says the key is the zone "
+          "letter alone")
     code, out, err = run_cli(base + ["--subtype-field", ""])
-    check(code == 1 and "is not in both vintages" not in out,
+    check(code == 1 and "is missing or blank in at least one vintage" not in out,
           "--subtype-field with an empty value turns the subtype off, and "
           "then there is nothing to say")
     code, out, err = run_cli(base + ["--change-distance", "60",
@@ -1678,6 +1785,29 @@ def _self_test(tmp):
     check(code == 4 and "same coordinate system" not in out,
           "parcels with no coordinates at all get no hint")
 
+    sub_old = tmpfile("sub_old.json", json.dumps(fset([
+        feat("AE", [rect(0, 0, 1000, 1000)], None),
+        feat("X", [rect(1000, 0, 2000, 1000)], None)])))
+    sub_new = tmpfile("sub_new.json", json.dumps(fset([
+        feat("AE", [rect(0, 0, 1000, 1000)], ""),
+        feat("X", [rect(1000, 0, 2000, 1000)], minimal)])))
+    code, out, err = run_cli([sub_old, sub_new, tmpfile(
+        "sub.csv", "PARCEL_ID,X,Y" + chr(10) + "A-1,500,500" + chr(10)
+        + "X-1,1500,500" + chr(10))])
+    check(code == 5 and "X-1  the same zone letter in both vintages" in out
+          and "CHANGED    0" in out and "STABLE     1" in out
+          and "same coordinate system" not in out,
+          "a subtype blank in the older file and filled in the newer is "
+          "exit 5 with the X parcel UNVERIFIED, not a CHANGED one  "
+          "<-- pinned defect")
+    code, out, err = run_cli([sub_old, sub_new, tmpfile(
+        "sub1.csv", "PARCEL_ID,X,Y" + chr(10)
+        + "X-1,1500,500" + chr(10))])
+    check(code == 4 and "same coordinate system" not in out
+          and "No parcel could be compared" in out,
+          "and when every parcel is of that kind the exit is 4 without a "
+          "coordinate system hint")
+
     # ---- what a refusal looks like
     def refuse(argv, fragment, label_):
         code, out, err = run_cli(argv)
@@ -1738,6 +1868,11 @@ def _self_test(tmp):
     check(len(read_parcels(two_blank, {"id": "PARCEL_ID", "x": "X",
                                        "y": "Y"})) == 2,
           "two parcels with no id are not a duplicate id")
+    spaced_id = tmpfile("spacedid.csv", "PARCEL_ID,X,Y"
+                      + chr(10) + "  P-9  ,1,1" + chr(10))
+    check(read_parcels(spaced_id, {"id": "PARCEL_ID", "x": "X",
+                                   "y": "Y"})[0].parcel_id == "P-9",
+          "spaces around a parcel id are not part of it  <-- pinned defect")
     latin = tmpfile("latin.csv", b"PARCEL_ID,X,Y\nP\xff1,1010,500\n", "wb")
     wrapper = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
     real_out = sys.stdout
