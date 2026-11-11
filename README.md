@@ -66,7 +66,7 @@ PASS  --out without --apply writes nothing  <-- pinned defect
 ...
 PASS  a tab at the start of the id, both zones and the reason gets an apostrophe and the number columns do not  <-- pinned defect
 ...
-PASS  the --out file fed back to the tool gives the same file, and the report names the id without the apostrophe  <-- pinned defect
+PASS  the --out file fed back to the tool gives the same ids, classes, zones and coordinates, and the report names the id without the apostrophe  <-- pinned defect
 ...
 PASS  a prefix of a flag, --ap, is refused and not read as the full flag  <-- pinned defect
 ...
@@ -103,15 +103,15 @@ tool does not replace it. It answers the narrower question about parcels.
 A spatial overlay of the parcels with each vintage, then a comparison of the two labels, is what
 the story describes. It uses the whole shape of the parcel, which this tool does not.
 
-Three unrelated GitHub repositories are also named floodshift: a disaster-response table, a
-flood segmentation model for satellite images, and one with no description. They share the name
-and nothing else.
+Other GitHub repositories are also named floodshift. On 2026-11-11 there were four: a
+disaster-response table, a flood segmentation model for satellite images, and two with no
+description. They share the name and nothing else.
 
 A search of GitHub on 2026-10-22 for a tool that compares the flood zones of two map vintages
 (`flood zone change FIRM`, `flood zone parcel change`, `FEMA flood map revision parcels`,
 `S_FLD_HAZ_AR`, `DFIRM compare`) returned nothing. A repeat on 2026-10-29 with `gh search repos`
-found only the same three floodshift repositories, and the descriptive queries returned nothing
-again. That shows only that the search found nothing.
+found only three other floodshift repositories (a fourth appeared on 2026-11-04), and the
+descriptive queries returned nothing again. That shows only that the search found nothing.
 
 ## Requirements
 
@@ -121,7 +121,7 @@ database.
 The self-test prints the same 225 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
-ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1037
+ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1038
 statements and 222 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
@@ -206,7 +206,7 @@ too. That includes the three inputs.
 
 | Exit | Meaning |
 |---|---|
-| 0 | Every parcel was decided: STABLE, RETRACED or CHANGED. It does not mean that no zone changed. Read the CHANGED count, or `--out`, for that. |
+| 0 | Every parcel was decided: STABLE, RETRACED or CHANGED. It does not mean that no zone changed. Read the CHANGED count, or `--out`, for that. See Limits. |
 | 1 | At least one parcel is in the REVIEW band. A person decides it. |
 | 2 | A file could not be read or written. |
 | 3 | The input was refused, because it cannot support an answer. |
@@ -239,10 +239,10 @@ The zone is its label with case and spacing folded, plus the subtype when both v
 one. A zone code of `ae` with a stray space is the same zone as `AE`. Zone X is two hazards:
 FEMA labels the moderate hazard areas "Zone B or Zone X (shaded)" and the minimal hazard areas
 "Zone C or Zone X (unshaded)"
-([flood zones](https://www.fema.gov/glossary/flood-zones)). Only the subtype tells the two X
-areas apart, so a parcel that goes from one to the other is a change. In the one query I ran,
-the X polygons carried the subtype `AREA OF MINIMAL FLOOD HAZARD` and the A polygons had no
-subtype. The tool compares whatever text the subtype holds.
+([flood zones](https://www.fema.gov/about/glossary/flood-zones)). Only the subtype tells the two X
+areas apart, so a parcel that goes from one to the other is a change. In the queries I ran,
+the X polygons carried subtypes such as `AREA OF MINIMAL FLOOD HAZARD` and
+`0.2 PCT ANNUAL CHANCE FLOOD HAZARD`, and the A polygons had no subtype. The tool compares whatever text the subtype holds.
 
 A vintage carries the subtype when at least one of its features has a value there. A field that
 is present and blank on every feature carries nothing. When only one vintage carries the
@@ -417,8 +417,11 @@ The tool reads one CSV, the parcel list, and `--out` is a valid parcel list: run
 `--id-field parcel_id --x-field x --y-field y` and the file comes back. The reader drops one
 apostrophe from the id when it stands before one of the six characters, and nothing else. The
 self-test writes a file with ids `=A`, `+B`, `-C`, `@D`, a tab id, a carriage return id,
-`'Q` and `P-1`, reads it back, and then runs the CLI on its own `--out` file and checks that
-the second file equals the first.
+`'Q` and `P-1`, and reads it back. A second check runs the CLI on a file with ids `=cmd`,
+`@cmd` and `-ok`, feeds its `--out` file back, and compares the `parcel_id`, `class`,
+`old_zone`, `new_zone`, `x` and `y` columns of the two files. Whole-file equality is not
+claimed: the `line` column can differ, because a bare carriage return inside an id is a line
+break in the first file and is gone from the second.
 
 None of the six reaches the output from a file today through a tab or a carriage return. The
 reader strips the white space around a parcel id, and the zone reader collapses white space in a
@@ -445,6 +448,7 @@ parcels read: 2, compared in both vintages: 1
   REVIEW     0
   CHANGED    0
   UNVERIFIED 1
+retrace distance 30.0 ft, change distance 100.0 ft
 
 a plain overlay reports 0 parcel(s) changed zone
 
@@ -455,9 +459,32 @@ VERDICT: 0 parcel(s) changed zone. No compared parcel has a different zone in th
 [exit 5]
 ```
 
-The files are `sub_old.json` and `sub_new.json` with an AE polygon (blank subtype in both) and
-an X polygon (blank in the old file, `AREA OF MINIMAL FLOOD HAZARD` in the new one). The
-parcels are `A-1` inside AE and `X-1` inside X. To get a decision, re-export the older vintage
+Save this as `make_sub.py` and run it to get the three files:
+
+```python
+import json
+
+
+def rect(x0, y0, x1, y1):
+    return [[x0, y0], [x0, y1], [x1, y1], [x1, y0], [x0, y0]]
+
+
+def layer(x_subtype):
+    return {"spatialReference": {"wkid": 2236}, "features": [
+        {"attributes": {"FLD_ZONE": "AE", "ZONE_SUBTY": ""},
+         "geometry": {"rings": [rect(0, 0, 1000, 1000)]}},
+        {"attributes": {"FLD_ZONE": "X", "ZONE_SUBTY": x_subtype},
+         "geometry": {"rings": [rect(1000, 0, 2000, 1000)]}}]}
+
+
+json.dump(layer(""), open("sub_old.json", "w"))
+json.dump(layer("AREA OF MINIMAL FLOOD HAZARD"), open("sub_new.json", "w"))
+open("sub.csv", "w").write("PARCEL_ID,X,Y\nA-1,500,500\nX-1,1500,500\n")
+```
+
+The files hold an AE polygon (blank subtype in both) and an X polygon (blank in the old file,
+`AREA OF MINIMAL FLOOD HAZARD` in the new one). The parcels are `A-1` inside AE and `X-1`
+inside X. To get a decision, re-export the older vintage
 with the subtype, or pass `--subtype-field ""` to say the letter is enough.
 
 ## Refusals
@@ -625,7 +652,18 @@ matches the sections above.
   saved and re-opened. This tool writes the file and does not see that later save.
 - **An id that really starts with an apostrophe and then `=`, `+`, `-`, `@`, a tab or a
   carriage return loses that apostrophe when it is read back.** The reader cannot tell it from
-  the apostrophe the writer added. An id of `'Q` and an id of `A'=1` are not affected.
+  the apostrophe the writer added. An id of `'Q` and an id of `A'=1` are not affected. If a file
+  holds both `'=A` and `=A`, they read as the same id and are refused as a duplicate id, so the
+  collision is never a false clean.
+- **Exit 64 covers an empty parcel file and a missing column.** An empty parcel file, or one
+  that lacks a column you named, exits 64 (usage) and not 2 or 3. A coordinate near 1e308 can
+  also exit 64, because the usage handler catches the internal `ValueError`; it is not exit 70.
+- **A dry run checks only that `--out` does not exist.** The folder of `--out` is not checked
+  until `--apply`, which exits 2 if the folder is missing.
+- **A crash prints a Python traceback to stderr.** The traceback holds local file paths and no
+  credential. The exit code is 70.
+- **The output CSV is UTF-8 without a byte order mark.** Import it as UTF-8 in Excel, or a
+  non-ASCII parcel id can show as garbled text.
 - **Interpreters re-run.** The 225 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and

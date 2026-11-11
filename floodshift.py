@@ -191,8 +191,9 @@ def edge_state(px, py, edges):
     """OUTSIDE, INSIDE or EDGE for a point against a polygon's edges.
 
     The even-odd rule, over all rings of the polygon, so a hole is a hole
-    whichever way the ring is wound. Esri documents the even-odd rule as the
-    one that always draws its polygons correctly. A point exactly on an edge
+    whichever way the ring is wound. Esri documents that the even-odd
+    fill rule guarantees a polygon draws correctly even if the ring
+    orientation is not as described. A point exactly on an edge
     is EDGE, which is kept apart so that a point on a line shared by two zones
     cannot be handed to either of them.
     """
@@ -1801,12 +1802,14 @@ def _self_test(tmp):
                                  "y", "--out", again, "--apply"])
     with open(again, newline="", encoding="utf-8") as fh:
         again_rows = list(csv.DictReader(fh))
-    check(code2 == code and [r["parcel_id"] for r in again_rows]
-          == [r["parcel_id"] for r in lead_back]
+    cols = ("parcel_id", "class", "old_zone", "new_zone", "x", "y")
+    check(code2 == code and len(again_rows) == len(lead_back)
+          and all([r[c] for r in again_rows] == [r[c] for r in lead_back]
+                  for c in cols)
           and "=cmd  " in out2 and "'=cmd" not in out2,
-          "the --out file fed back to the tool gives the same file, and "
-          "the report names the id without the apostrophe  "
-          "<-- pinned defect")
+          "the --out file fed back to the tool gives the same ids, "
+          "classes, zones and coordinates, and the report names the id "
+          "without the apostrophe  <-- pinned defect")
     for flag in ("--ap", "--appl", "--ou", "--out-"):
         err_buf, refusal = io.StringIO(), False
         with contextlib.redirect_stderr(err_buf):
