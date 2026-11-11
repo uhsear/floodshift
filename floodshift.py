@@ -283,6 +283,7 @@ class Vintage(object):
         self.has_subtype = has_subtype
         self.lone = ""
         self.by_key = {}
+        self.gaps = set()
 
     def index(self, use_subtype):
         """Fix the key of every zone and group the zones by it."""
@@ -290,6 +291,12 @@ class Vintage(object):
         for zone in self.zones:
             zone.key = (zone.zone, zone.subtype if use_subtype else "")
             self.by_key.setdefault(zone.key, []).append(zone)
+        # a letter with a blank polygon and a filled one in one vintage has
+        # a missing value, not a hazard that has no subtype
+        self.gaps = set()
+        if use_subtype:
+            self.gaps = (set(z for (z, s) in self.by_key if not s)
+                         & set(z for (z, s) in self.by_key if s))
 
     def bounds(self):
         if not self.zones:
@@ -555,6 +562,13 @@ def judge(parcel, old, new, retrace, change, units):
     if problems:
         return Result(parcel, UNVERIFIED, "; ".join(problems))
     a, b = next(iter(keys_old)), next(iter(keys_new))
+    gap = [(which, k[0]) for which, v, k in (("old", old, a), ("new", new, b))
+           if not k[1] and k[0] in v.gaps]
+    if gap:
+        return Result(parcel, UNVERIFIED,
+                      "the subtype is blank on this polygon of the %s "
+                      "vintage, where other polygons of zone %s have one, so "
+                      "the zone cannot be matched" % gap[0])
     if a == b:
         blind = [which for which, v in (("old", old), ("new", new))
                  if v.lone and v.subtype_at(parcel.x, parcel.y)]
@@ -1341,6 +1355,21 @@ def _self_test(tmp):
           "a subtype field that is blank on every feature of the older "
           "vintage is no subtype, so a filled newer one is no false CHANGED  "
           "<-- pinned defect")
+    o, n, notes = pair([feat("AE", [rect(0, 0, 1000, 1000)], ""),
+                        feat("X", [rect(1000, 0, 2000, 1000)], minimal)],
+                       [feat("AE", [rect(0, 0, 1000, 1000)], ""),
+                        feat("X", [rect(1000, 0, 2000, 1000)], ""),
+                        feat("X", [rect(2000, 0, 3000, 1000)], shaded)])
+    r = one(o, n, 1500, 500)
+    check(r.cls == UNVERIFIED and not notes and "blank on this polygon of "
+          "the new vintage" in r.reason and one(o, n, 500, 500).cls == STABLE,
+          "one polygon with a blank subtype in a vintage that carries it "
+          "elsewhere for that zone is no answer, not a false CHANGED, while "
+          "a zone that has no subtype anywhere stays STABLE  "
+          "<-- pinned defect")
+    r = one(n, o, 1500, 500)
+    check(r.cls == UNVERIFIED and "of the old vintage" in r.reason,
+          "and the same when the blank polygon is in the old vintage")
     sweep_old = [feat("AE", [rect(0, 0, 2000, 1000)]),
                  feat("X", [rect(0, 1100, 2000, 1200)])]
     sweep_new = [feat("AE", [rect(0, 0, 1000, 1000)]),

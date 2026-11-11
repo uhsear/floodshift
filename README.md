@@ -53,6 +53,8 @@ PASS  a subtype in one vintage only does not make the same zone two zones, and t
 ...
 PASS  a subtype field that is blank on every feature of the older vintage is no subtype, so a filled newer one is no false CHANGED  <-- pinned defect
 ...
+PASS  one polygon with a blank subtype in a vintage that carries it elsewhere for that zone is no answer, not a false CHANGED, while a zone that has no subtype anywhere stays STABLE  <-- pinned defect
+...
 PASS  a point exactly on the line two zones share is UNVERIFIED, neither zone may claim it  <-- pinned defect
 ...
 PASS  exactly one parcel with no answer is exit 5, not a clean 0  <-- pinned defect
@@ -81,10 +83,10 @@ PASS  an unexpected exception exits 70, not the 1 that means review  <-- pinned 
 PASS  the footer reports failures by count and by name, and exits 1  <-- pinned defect
 ...
 --------------------------------------------------------------------
-225 assertions, 0 failed
+227 assertions, 0 failed
 ```
 
-The full run prints all 225 assertions. Each `...` line above is where this block is cut.
+The full run prints all 227 assertions. Each `...` line above is where this block is cut.
 
 ## What already exists
 
@@ -118,11 +120,11 @@ descriptive queries returned nothing again. That shows only that the search foun
 Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no network, no
 database.
 
-The self-test prints the same 225 assertions on Windows with Python 3.13.2, Python 3.12 and
+The self-test prints the same 227 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
-ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1038
-statements and 222 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
+ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1050
+statements and 226 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
 ```
@@ -550,29 +552,13 @@ VERDICT: NOTHING COMPARED. No parcel could be compared in both vintages, so the 
 [exit 4]
 ```
 
-## Run on real polygons
+## The live service
 
-This section was measured once, on an earlier build of the tool, before the exit 5 rule and the
-subtype rule above. I did not run it again for this version. The response and the outputs were
-not kept, so you cannot check the figures from this repository.
-
-One query for a small box against the FEMA layer returned 19 polygons. Two of them hold about
-420 thousand and 380 thousand vertices. I used that response, projected with `outSR`, as the
-new vintage. I made the old vintage by moving every vertex 12 feet east and 9 feet south, a
-15 foot shift. That is a simulated re-digitization, not a real one. The parcels are 400 points
-6 feet either side of vertices of the hazard A polygons.
-
-- A plain overlay reported 40 parcels as changed zone. The tool classified all 40 RETRACED, with
-  a shift of 3.5 to 13.1 feet. 151 were STABLE. 209 had no answer, because they lie in no zone of
-  the new vintage.
-- I then relabelled the largest A polygon in the old vintage as X. That is a real change
-  in the label and none in the shape. The tool reported 136 CHANGED and 3 RETRACED among 139 zone
-  differences.
-- Each run took about 5 to 6 seconds for these 800 thousand vertices on Windows.
-
-On 2026-10-29 I checked the service again. Layer 28 reports a maximum record count of 2000 and
-wkid 4269, and a query with `resultRecordCount=5` returns `exceededTransferLimit: true`. That
-matches the sections above.
+I did not keep a run on real FEMA polygons, so this README makes no claim about run time or
+about how many parcels such a run changes. The one check that was repeated is the service
+itself. On 2026-10-29 layer 28 reported a maximum record count of 2000 and wkid 4269, and a
+query with `resultRecordCount=5` returned `exceededTransferLimit: true`. That matches the
+refusal described above.
 
 ## Limits
 
@@ -631,8 +617,8 @@ matches the sections above.
   and a wkid on the other are refused for the same reason.
 - **Pure Python.** Edges are filed in horizontal bands, so a point meets only the edges level
   with it. Finding the zones that hold a parcel scans the bounding box of every zone, so the
-  work grows with parcels times zones. Run time was measured only for 400 parcels against 19
-  polygons, on an earlier build. A county-wide layer against a large parcel file will be slow.
+  work grows with parcels times zones. Run time was not measured at county scale. A
+  county-wide layer against a large parcel file will be slow.
 - **Coordinates beyond about 1e300 are not supported.** A polygon with a near-zero height, or a
   coordinate near 1e308, can stop the run with exit 64 or 70, which is never a finding. A
   coordinate of 1e308 on both sides of a polygon gave exit 64 in my test.
@@ -648,8 +634,21 @@ matches the sections above.
   because the file exists. Delete the partial file by hand.
 - **Only six leading characters are guarded.** A line feed, the full-width forms of `=`, `+`,
   `-` and `@`, and a formula that starts after white space are not. OWASP lists the line feed
-  and the full-width forms as well, and warns that Excel can drop the apostrophe when a CSV is
-  saved and re-opened. This tool writes the file and does not see that later save.
+  and the full-width forms as well, and warns that Excel may remove quotes or escape characters
+  when a CSV is saved and re-opened. This tool writes the file and does not see that later
+  save.
+- **A blank subtype on one polygon is no answer.** If a vintage gives a zone letter a subtype on
+  some polygons and leaves it blank on others, a parcel in a blank one is UNVERIFIED and the
+  run exits 5. The tool takes the blank for a missing value. A zone that is blank on every
+  polygon of both vintages, such as a plain `AE`, is still compared.
+- **A paged response is checked only through `exceededTransferLimit`.** A page that was never
+  joined into the file gives no refusal, so a missing region can make a parcel next to its
+  border read as CHANGED. Join every page and check the polygon count yourself.
+- **A parcel id that holds a line feed or a terminal escape sequence can add lines to the printed
+  report,** including a line that looks like a verdict. The last `VERDICT` line is the tool's,
+  and `--out` is not affected.
+- **If the reader of stdout closes the pipe early,** for example `| head`, the run ends with
+  exit 70 and a traceback. Read the exit code of floodshift, not of the pipe.
 - **An id that really starts with an apostrophe and then `=`, `+`, `-`, `@`, a tab or a
   carriage return loses that apostrophe when it is read back.** The reader cannot tell it from
   the apostrophe the writer added. An id of `'Q` and an id of `A'=1` are not affected. If a file
@@ -664,7 +663,7 @@ matches the sections above.
   credential. The exit code is 70.
 - **The output CSV is UTF-8 without a byte order mark.** Import it as UTF-8 in Excel, or a
   non-ASCII parcel id can show as garbled text.
-- **Interpreters re-run.** The 225 assertions were re-run on Windows with Python 3.13.2, 3.12
+- **Interpreters re-run.** The 227 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
   holds no credential, so there is no stub server. The self-test disables `socket.socket` while
