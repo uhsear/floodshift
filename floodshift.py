@@ -672,10 +672,22 @@ def describe(report, sample=DEFAULT_SAMPLE, overlap_hint=""):
     return lines
 
 
+# The first characters a spreadsheet reads as a formula (OWASP, CSV Injection).
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+
 def _cell(text):
-    """Text for a spreadsheet cell. A leading = + - or @ is read as a formula,
-    so it gets a leading apostrophe. Numbers are not passed through here."""
-    return "'" + text if text[:1] in ("=", "+", "-", "@") else text
+    """Text for a spreadsheet cell. A leading = + - @ tab or CR is read as a
+    formula, so it gets a leading apostrophe. Numbers are not passed here."""
+    return "'" + text if text[:1] in _FORMULA_LEAD else text
+
+
+def _uncell(text):
+    """Undo _cell: drop one apostrophe that stands before a formula lead.
+    An apostrophe before anything else is part of the text and stays."""
+    if text[:1] == "'" and text[1:2] in _FORMULA_LEAD:
+        return text[1:]
+    return text
 
 
 def classified_rows(report):
@@ -692,7 +704,7 @@ def classified_rows(report):
             "class": r.cls,
             "shift": ("" if r.shift is None or math.isinf(r.shift)
                       else "%.3f" % r.shift),
-            "reason": r.reason,
+            "reason": _cell(r.reason),
         })
     return rows
 
@@ -726,7 +738,9 @@ def read_parcels(path, fields):
             # line_num is where the record ends. A blank line or a quoted
             # newline would move a naive row count off the file.
             line = reader.line_num - sum(_breaks(v) for v in raw.values())
-            parcel_id = (raw.get(fields["id"]) or "").strip()
+            # --out writes the id through _cell, so an id read back from it
+            # loses the same apostrophe.
+            parcel_id = _uncell(raw.get(fields["id"]) or "").strip()
             parcels.append(Parcel(parcel_id, to_number(raw.get(fields["x"])),
                                   to_number(raw.get(fields["y"])), line))
     seen = {}
@@ -1615,6 +1629,44 @@ def _self_test(tmp):
           "a parcel id or zone that starts with = + - or @ is written with a "
           "leading apostrophe, a negative coordinate is not  "
           "<-- pinned defect")
+    leads = (("=", "an equals sign"), ("+", "a plus sign"),
+             ("-", "a minus sign"), ("@", "an at sign"), ("\t", "a tab"),
+             ("\r", "a carriage return"))
+    for lead, name in leads:
+        guarded = classified_rows(Report([Result(
+            Parcel(lead + "id", -1.5, -2.5, 7), UNVERIFIED, lead + "why",
+            (lead + "Z", "sub"), (lead + "Y", ""), 3.0)], 30.0, 100.0,
+            "ft"))[0]
+        check(guarded["parcel_id"] == "'" + lead + "id"
+              and guarded["old_zone"] == "'" + lead + "Z [sub]"
+              and guarded["new_zone"] == "'" + lead + "Y"
+              and guarded["reason"] == "'" + lead + "why"
+              and guarded["x"] == "-1.5" and guarded["y"] == "-2.5"
+              and guarded["line"] == 7 and guarded["shift"] == "3.000"
+              and guarded["class"] == UNVERIFIED,
+              "%s at the start of the id, both zones and the reason gets "
+              "an apostrophe and the number columns do not  "
+              "<-- pinned defect" % name)
+        check(_uncell(_cell(lead + "text")) == lead + "text",
+              "%s at the start of a cell survives a write and a read back"
+              % name)
+    plain = classified_rows(Report([Result(
+        Parcel("it's=1", 1.0, 2.0, 2), STABLE, "a=b+c", ("A-E", "@x"),
+        ("'AE", ""))], 30.0, 100.0, "ft"))[0]
+    check(plain["parcel_id"] == "it's=1" and plain["old_zone"] == "A-E [@x]"
+          and plain["new_zone"] == "'AE" and plain["reason"] == "a=b+c"
+          and _cell("") == "" and _uncell("") == "",
+          "a formula character past the first place, an apostrophe lead and "
+          "an empty cell are written as they are")
+    check(_cell("\n=1") == "\n=1" and _cell(" =1") == " =1"
+          and _cell(chr(0xFF1D) + "1") == chr(0xFF1D) + "1",
+          "a line feed, a space or a full-width equals sign at the start is "
+          "not guarded, as the README Limits say")
+    check(_uncell("'abc") == "'abc" and _uncell("'") == "'"
+          and _uncell("''=x") == "''=x" and _uncell("'=x") == "=x"
+          and _uncell("'\t") == "\t" and _uncell("'\r") == "\r",
+          "reading back drops one apostrophe before a formula lead and "
+          "nothing else")
 
     # ---- the files
     def tmpfile(name, text, mode="w"):
@@ -1694,6 +1746,67 @@ def _self_test(tmp):
           and written[0]["x"] == "1010.0" and written[0]["y"] == "500.0"
           and tuple(written[0].keys()) == OUT_COLUMNS,
           "--apply writes one row per parcel with the class")
+    lead_ids = ("=A", "+B", "-C", "@D", "\tE", "\rF", "'Q", "P-1")
+    lead_rows = classified_rows(Report([
+        Result(Parcel(pid, -1.5, 2.5, 99), STABLE, "r", ("AE", ""),
+               ("AE", "")) for pid in lead_ids], 30.0, 100.0, "ft"))
+    lead_csv = os.path.join(tmp, "lead.csv")
+    _write_csv(lead_csv, OUT_COLUMNS, lead_rows)
+    with open(lead_csv, newline="", encoding="utf-8") as fh:
+        lead_text = fh.read()
+    back = read_parcels(lead_csv, {"id": "parcel_id", "x": "x", "y": "y"})
+    check(lead_text.startswith("parcel_id,") and "'=A,99," in lead_text
+          and [p.parcel_id for p in back] == ["=A", "+B", "-C", "@D", "E",
+                                              "F", "'Q", "P-1"]
+          and all(p.x == -1.5 and p.y == 2.5 for p in back)
+          and [p.line for p in back] == [2, 3, 4, 5, 6, 7, 9, 10],
+          "the --out file read back as parcels gives the ids that went in, "
+          "minus the leading and trailing space the reader always drops, "
+          "with the apostrophe lead gone, a real apostrophe kept, and a "
+          "carriage return in a cell counted as a line break  "
+          "<-- pinned defect")
+    lead_old = tmpfile("lead_old.json", json.dumps(fset([
+        feat("AE", [rect(0, 0, 1000, 1000)]),
+        feat("X", [rect(1000, 0, 2000, 1000)])])))
+    lead_new = tmpfile("lead_new.json", json.dumps(fset([
+        feat("=AE", [rect(0, 0, 1000, 1000)]),
+        feat("+X", [rect(1000, 0, 2000, 1000)])])))
+    lead_in = tmpfile("lead_in.csv", "PARCEL_ID,X,Y\n=cmd,500,500\n"
+                      "@cmd,1500,500\n-ok,1600,600\n")
+    lead_out = os.path.join(tmp, "lead_out.csv")
+    code, out, err = run_cli([lead_old, lead_new, lead_in, "--out",
+                              lead_out, "--apply"])
+    with open(lead_out, newline="", encoding="utf-8") as fh:
+        lead_back = list(csv.DictReader(fh))
+    check(code == 0 and [r["parcel_id"] for r in lead_back]
+          == ["'=cmd", "'@cmd", "'-ok"]
+          and [r["old_zone"] for r in lead_back] == ["AE", "X", "X"]
+          and [r["new_zone"] for r in lead_back] == ["'=AE", "'+X", "'+X"]
+          and [r["x"] for r in lead_back] == ["500.0", "1500.0", "1600.0"],
+          "the CLI writes the apostrophe before an id that starts with = @ "
+          "or -, and before a zone that starts with = or +, and not before "
+          "a zone that does not  <-- pinned defect")
+    stripped = read_parcels(tmpfile("ws.csv", "PARCEL_ID,X,Y\n\t=A,1,1\n"
+                                    "\"\rB\",2,2\n"),
+                            {"id": "PARCEL_ID", "x": "X", "y": "Y"})
+    check([p.parcel_id for p in stripped] == ["=A", "B"]
+          and parse_vintage(fset([feat("\tae", [rect(0, 0, 9, 9)])]), "v",
+                            DEFAULT_ZONE_FIELD, "").zones[0].zone == "AE",
+          "a tab or a carriage return before a parcel id or a zone label "
+          "is dropped by the reader, so only the library API can reach the "
+          "writer with one")
+    again = os.path.join(tmp, "again.csv")
+    code2, out2, err2 = run_cli([lead_old, lead_new, lead_out, "--id-field",
+                                 "parcel_id", "--x-field", "x", "--y-field",
+                                 "y", "--out", again, "--apply"])
+    with open(again, newline="", encoding="utf-8") as fh:
+        again_rows = list(csv.DictReader(fh))
+    check(code2 == code and [r["parcel_id"] for r in again_rows]
+          == [r["parcel_id"] for r in lead_back]
+          and "=cmd  " in out2 and "'=cmd" not in out2,
+          "the --out file fed back to the tool gives the same file, and "
+          "the report names the id without the apostrophe  "
+          "<-- pinned defect")
     for flag in ("--ap", "--appl", "--ou", "--out-"):
         err_buf, refusal = io.StringIO(), False
         with contextlib.redirect_stderr(err_buf):

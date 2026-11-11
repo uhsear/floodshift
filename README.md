@@ -64,6 +64,10 @@ PASS  vintages in 2236 and 3857 are refused  <-- pinned defect
 ...
 PASS  --out without --apply writes nothing  <-- pinned defect
 ...
+PASS  a tab at the start of the id, both zones and the reason gets an apostrophe and the number columns do not  <-- pinned defect
+...
+PASS  the --out file fed back to the tool gives the same file, and the report names the id without the apostrophe  <-- pinned defect
+...
 PASS  a prefix of a flag, --ap, is refused and not read as the full flag  <-- pinned defect
 ...
 PASS  a subtype blank in the older file and filled in the newer is exit 5 with the X parcel UNVERIFIED, not a CHANGED one  <-- pinned defect
@@ -77,10 +81,10 @@ PASS  an unexpected exception exits 70, not the 1 that means review  <-- pinned 
 PASS  the footer reports failures by count and by name, and exits 1  <-- pinned defect
 ...
 --------------------------------------------------------------------
-206 assertions, 0 failed
+225 assertions, 0 failed
 ```
 
-The full run prints all 206 assertions. Each `...` line above is where this block is cut.
+The full run prints all 225 assertions. Each `...` line above is where this block is cut.
 
 ## What already exists
 
@@ -114,11 +118,11 @@ again. That shows only that the search found nothing.
 Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no network, no
 database.
 
-The self-test prints the same 206 assertions on Windows with Python 3.13.2, Python 3.12 and
+The self-test prints the same 225 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
-ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1000
-statements and 218 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
+ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1037
+statements and 222 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
 ```
@@ -399,9 +403,30 @@ floodshift.py: error: unrecognized arguments: --ap
 [exit 64]
 ```
 
-A parcel id or a zone label in `--out` that starts with `=`, `+`, `-` or `@` is written with a
-leading apostrophe, so a spreadsheet does not read it as a formula. The self-test pins the case.
-Coordinates are not touched, so a negative coordinate keeps its sign.
+A spreadsheet reads a cell as a formula when its text starts with `=`, `+`, `-`, `@`, a tab or
+a carriage return
+([OWASP, CSV Injection](https://owasp.org/www-community/attacks/CSV_Injection) lists these
+characters and the single-quote prefix as the defence). Every text column of `--out` is written
+with one leading apostrophe when it starts with one of the six: `parcel_id`, `old_zone`,
+`new_zone` and `reason`. The numeric columns (`line`, `x`, `y`, `shift`) are not touched, so a
+negative coordinate keeps its sign, and `class` is one of five fixed words. The self-test
+checks each of the four text columns for each of the six characters, and that the numeric
+columns come out unchanged, with a negative coordinate.
+
+The tool reads one CSV, the parcel list, and `--out` is a valid parcel list: run with
+`--id-field parcel_id --x-field x --y-field y` and the file comes back. The reader drops one
+apostrophe from the id when it stands before one of the six characters, and nothing else. The
+self-test writes a file with ids `=A`, `+B`, `-C`, `@D`, a tab id, a carriage return id,
+`'Q` and `P-1`, reads it back, and then runs the CLI on its own `--out` file and checks that
+the second file equals the first.
+
+None of the six reaches the output from a file today through a tab or a carriage return. The
+reader strips the white space around a parcel id, and the zone reader collapses white space in a
+label, so a leading tab or carriage return is gone before the writer sees it. The tab and
+carriage return guard is there for the next code path, and the self-test reaches it through
+`classified_rows` directly. The `=`, `+`, `-` and `@` cases are reached end to end through the
+CLI. The `reason` text always begins with a fixed word, and the guard on it is the same belt
+and braces.
 
 ## A subtype in one vintage only
 
@@ -594,7 +619,14 @@ matches the sections above.
 - **The output is written in place,** not through a temporary file. A failed write, such as a
   full disk, can leave a partial file, and the exit code is 2. A second run is then refused
   because the file exists. Delete the partial file by hand.
-- **Interpreters re-run.** The 206 assertions were re-run on Windows with Python 3.13.2, 3.12
+- **Only six leading characters are guarded.** A line feed, the full-width forms of `=`, `+`,
+  `-` and `@`, and a formula that starts after white space are not. OWASP lists the line feed
+  and the full-width forms as well, and warns that Excel can drop the apostrophe when a CSV is
+  saved and re-opened. This tool writes the file and does not see that later save.
+- **An id that really starts with an apostrophe and then `=`, `+`, `-`, `@`, a tab or a
+  carriage return loses that apostrophe when it is read back.** The reader cannot tell it from
+  the apostrophe the writer added. An id of `'Q` and an id of `A'=1` are not affected.
+- **Interpreters re-run.** The 225 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
   holds no credential, so there is no stub server. The self-test disables `socket.socket` while
