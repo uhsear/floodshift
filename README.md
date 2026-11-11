@@ -141,6 +141,14 @@ measures a straight line between two points and converts nothing.
 **The two vintages** are Esri JSON feature sets. A query against a feature layer with `f=json`
 returns that shape, and `outSR` sets the coordinate system of the returned geometry
 ([Query](https://developers.arcgis.com/rest/services-reference/enterprise/query-feature-service-layer/)).
+Three more things the tool relies on come from Esri pages. The Query page shows a response
+that carries `"exceededTransferLimit" : true` next to the features when the result is cut
+short, with a `resultPaginationToken` that "can be used in subsequent requests to fetch the next set of results". The
+[geometry objects](https://developers.arcgis.com/rest/services-reference/enterprise/geometry-objects/)
+page says "the JSON wkid property will always be the value that was originally assigned to an
+SR when it was created" and that `latestWkid` "identifies the current WKID value". A polygon
+may hold `curveRings` as well as `rings`, and the tool refuses `curveRings`. The Query page's
+`returnTrueCurves` parameter, when false (the default), converts curves to densified polygons.
 The ArcGIS Pro tool
 [Features To JSON](https://doc.esri.com/en/arcgis-pro/latest/tool-reference/conversion/features-to-json.html)
 writes Esri JSON by default, and its summary says that the fields, geometry, and spatial
@@ -246,9 +254,10 @@ one. A zone code of `ae` with a stray space is the same zone as `AE`. Zone X is 
 FEMA labels the moderate hazard areas "Zone B or Zone X (shaded)" and the minimal hazard areas
 "Zone C or Zone X (unshaded)"
 ([flood zones](https://www.fema.gov/about/glossary/flood-zones)). Only the subtype tells the two X
-areas apart, so a parcel that goes from one to the other is a change. In the queries I ran,
-the X polygons carried subtypes such as `AREA OF MINIMAL FLOOD HAZARD` and
-`0.2 PCT ANNUAL CHANCE FLOOD HAZARD`, and the A polygons had no subtype. The tool compares whatever text the subtype holds.
+areas apart, so a parcel that goes from one to the other is a change. Zone X polygons carry
+subtypes such as `AREA OF MINIMAL FLOOD HAZARD` and `0.2 PCT ANNUAL CHANCE FLOOD HAZARD`, but
+other zones carry subtypes too (see Limits for a dated count). The tool compares whatever text
+the subtype holds.
 
 A vintage carries the subtype when at least one of its features has a value there. A field that
 is present and blank on every feature carries nothing. When only one vintage carries the
@@ -701,11 +710,14 @@ refusal described above.
   save.
 - **A subtype missing from both vintages holds back only zone X.** The run exits 5 when a
   parcel is X in both vintages. A parcel in another zone that has subtypes, such as an `AE`
-  floodway, is compared by letter. In one undated sample of 2000 records of the FEMA layer, with no query recorded,
-  `AE` carried the subtype `FLOODWAY` on 69 polygons and a blank subtype on 705. The self-test
-  cannot reproduce that count. A vintage that has both
-  makes a parcel in a blank `AE` polygon UNVERIFIED (next item), so a run can exit 5 on this
-  alone.
+  floodway, is compared by letter. On 2026-11-11 a grouped count on layer 28 (`groupByFieldsForStatistics=ZONE_SUBTY`
+with `where=FLD_ZONE='AE'`) returned `FLOODWAY` 49916, `COASTAL FLOODPLAIN` 12195,
+`ADMINISTRATIVE FLOODWAY` 1762, and a null subtype on 836014 polygons. The same query for zone
+`A` returned a null subtype on 418246 polygons and non-blank subtypes on others, such as
+`ADMINISTRATIVE FLOODWAY` 119. So A and AE zones do carry subtypes, and most of their polygons
+carry none. The self-test cannot re-run this count, because it needs the live service. A
+vintage that has both makes a parcel in a blank `AE` polygon UNVERIFIED (next item), so a run
+can exit 5 on this alone.
 - **A blank subtype on one polygon is no answer.** If a vintage gives a zone letter a subtype on
   some polygons and leaves it blank on others, a parcel in a blank one is UNVERIFIED and the
   run exits 5. The tool takes the blank for a missing value. A zone that is blank on every
@@ -725,6 +737,19 @@ refusal described above.
   the apostrophe the writer added. An id of `'Q` and an id of `A'=1` are not affected. If a file
   holds both `'=A` and `=A`, they read as the same id and are refused as a duplicate id, so the
   collision is never a false clean.
+- **A live subtype can be a single space.** The same 2026-11-11 count showed `' '` on 63 `AE`
+  and 12 `A` polygons. The tool folds it to blank, so it counts as no subtype. This is
+  intended. The self-test pins it with a subtype of two spaces.
+- **A leading tab or carriage return in a parcel id or zone label does not reach the writer from
+  a file.** The reader strips the id, and the zone reader collapses white space. The tab and
+  carriage return guard is proven through `classified_rows`, not through the command line.
+- **The id and zone text in `--out` is not the source text byte for byte.** The id is stripped
+  of surrounding white space and a leading formula character gets one apostrophe. Zone labels
+  are upper-cased with white space collapsed. Compare ids after you read the file back, not as
+  raw strings.
+- **The numeric `x` and `y` columns are not guarded.** A negative coordinate starts with a minus
+  sign (for example `-5.0`). A CSV linter that flags every cell that starts with `-` flags
+  these, but a spreadsheet reads them as numbers.
 - **Exit 64 covers an empty parcel file and a missing column.** An empty parcel file, or one
   that lacks a column you named, exits 64 (usage) and not 2 or 3. A coordinate near 1e308 can
   also exit 64, because the usage handler catches the internal `ValueError`; it is not exit 70.
