@@ -81,6 +81,7 @@ DEFAULT_X_FIELD = "X"
 DEFAULT_Y_FIELD = "Y"
 DEFAULT_ZONE_FIELD = "FLD_ZONE"
 DEFAULT_SUBTYPE_FIELD = "ZONE_SUBTY"
+SUBTYPE_ZONE = "X"  # the one letter that is two hazards, shaded and unshaded
 
 # =============================================================================
 # End of CONFIGURATION.
@@ -282,6 +283,7 @@ class Vintage(object):
         self.sr = sr
         self.has_subtype = has_subtype
         self.lone = ""
+        self.bare = False
         self.by_key = {}
         self.gaps = set()
 
@@ -428,11 +430,12 @@ def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
     A subtype is part of the key only when both vintages carry it, that is,
     when some feature of each has a non-blank value. Zone X covers both the
     shaded and the unshaded hazard areas and only the subtype tells them
-    apart. A subtype present in one vintage and not the other would make
-    every zone differ, so it is left out of the key. The vintage that has it
-    is marked, and judge() gives no answer for a parcel whose zone letter
-    matches in a zone that holds a subtype there: the letter alone cannot say
-    that the hazard stayed the same.
+    apart. A subtype in neither vintage leaves zone X, and only X, with no
+    answer for a parcel that is X in both. A subtype present in one vintage
+    and not the other would make every zone differ, so it is left out of the
+    key. The vintage that has it is marked, and judge() gives no answer for a
+    parcel whose zone letter matches in a zone that holds a subtype there:
+    the letter alone cannot say that the hazard stayed the same.
 
     Raises Refused when the two vintages declare spatial references that
     share no identifier, or when their extents do not touch.
@@ -448,6 +451,14 @@ def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
             note += (". A parcel in the same zone of both vintages is "
                      "UNVERIFIED where the vintage that has the subtype "
                      "gives the zone one")
+        else:
+            old.bare = new.bare = True
+            note += (". A parcel in zone %s in both vintages is UNVERIFIED, "
+                     "because only the subtype tells shaded %s from "
+                     "unshaded %s. Add %s to outFields, or pass "
+                     "--subtype-field \"\" to accept the letter alone"
+                     % (SUBTYPE_ZONE, SUBTYPE_ZONE, SUBTYPE_ZONE,
+                        subtype_field))
         notes.append(note)
     old.index(use_subtype)
     new.index(use_subtype)
@@ -577,6 +588,12 @@ def judge(parcel, old, new, retrace, change, units):
                           "the same zone letter in both vintages, but only "
                           "the %s vintage has a subtype, so a move between "
                           "subtypes of this zone cannot be seen" % blind[0])
+        if old.bare and a[0] == SUBTYPE_ZONE:
+            return Result(parcel, UNVERIFIED,
+                          "zone %s in both vintages, but neither vintage "
+                          "has a subtype, so a move between shaded and "
+                          "unshaded %s cannot be seen"
+                          % (SUBTYPE_ZONE, SUBTYPE_ZONE))
         return Result(parcel, STABLE, "the same zone in both vintages", a, b)
     shift = max(old.distance_to(b, parcel.x, parcel.y),
                 new.distance_to(a, parcel.x, parcel.y))
@@ -1032,8 +1049,14 @@ def _self_test(tmp):
         data.update(extra or {})
         return data
 
-    def pair(old_features, new_features, subtype_field=DEFAULT_SUBTYPE_FIELD,
+    def pair(old_features, new_features, subtype_field=None,
              old_wkid=2236, new_wkid=2236):
+        # None: the default field, or off when no feature carries it, so the
+        # many geometry cases below need not say it
+        if subtype_field is None:
+            subtype_field = (DEFAULT_SUBTYPE_FIELD if any(
+                DEFAULT_SUBTYPE_FIELD in f["attributes"]
+                for f in old_features + new_features) else "")
         old = parse_vintage(fset(old_features, old_wkid), "old",
                             DEFAULT_ZONE_FIELD, subtype_field)
         new = parse_vintage(fset(new_features, new_wkid), "new",
@@ -1370,6 +1393,29 @@ def _self_test(tmp):
     r = one(n, o, 1500, 500)
     check(r.cls == UNVERIFIED and "of the old vintage" in r.reason,
           "and the same when the blank polygon is in the old vintage")
+    o, n, notes = pair(old_world, old_world, DEFAULT_SUBTYPE_FIELD)
+    r = one(o, n, 1500, 500)
+    check(r.cls == UNVERIFIED and "neither vintage has a subtype" in r.reason
+          and len(notes) == 1 and "zone X in both vintages is UNVERIFIED"
+          in notes[0] and "--subtype-field" in notes[0],
+          "a subtype in neither vintage leaves a parcel that is X in both "
+          "with no answer, as shaded and unshaded X look alike, and the "
+          "note says how to fix it  <-- pinned defect")
+    check(one(o, n, 500, 500).cls == STABLE,
+          "and a zone other than X is still STABLE")
+    o, n, notes = pair(old_world, old_world, "")
+    check(one(o, n, 1500, 500).cls == STABLE and notes == [],
+          "with the subtype turned off the same X parcel is STABLE, said "
+          "nothing")
+    o, n, notes = pair([feat("AE", [rect(0, 0, 1000, 1000)], None),
+                        feat("X", [rect(1000, 0, 2000, 1000)], None)],
+                       [feat("AE", [rect(0, 0, 1015, 1000)], ""),
+                        feat("X", [rect(1015, 0, 2000, 1000)], "  ")])
+    check(one(o, n, 1500, 500).cls == UNVERIFIED and len(notes) == 1
+          and one(o, n, 1010, 500).cls == RETRACED,
+          "a subtype field blank on every feature of both vintages is no "
+          "subtype, and a zone that differs by letter is still judged by "
+          "its shift  <-- pinned defect")
     sweep_old = [feat("AE", [rect(0, 0, 2000, 1000)]),
                  feat("X", [rect(0, 1100, 2000, 1200)])]
     sweep_new = [feat("AE", [rect(0, 0, 1000, 1000)]),
@@ -1740,6 +1786,17 @@ def _self_test(tmp):
     check("is missing or blank in at least one vintage" in out,
           "the layers carry no subtype, and the run says the key is the zone "
           "letter alone")
+    x_csv = tmpfile("xparcel.csv", "PARCEL_ID,X,Y\nXS-1,1500,500\nS-1,500,500\n")
+    code, out, err = run_cli([old_json, new_json, x_csv])
+    check(code == 5 and "XS-1  zone X in both vintages, but neither vintage "
+          "has a subtype" in out and "1 of 2 parcel(s) have no answer" in out,
+          "the whole CLI on layers with no subtype exits 5 for a parcel that "
+          "is X in both, not a clean 0  <-- pinned defect")
+    code, out, err = run_cli([old_json, new_json, x_csv, "--subtype-field",
+                              ""])
+    check(code == 0 and "VERDICT: 0 parcel(s) changed zone" in out
+          and "no answer" not in out,
+          "and --subtype-field with an empty value accepts the letter alone")
     code, out, err = run_cli(base + ["--subtype-field", ""])
     check(code == 1 and "is missing or blank in at least one vintage" not in out,
           "--subtype-field with an empty value turns the subtype off, and "

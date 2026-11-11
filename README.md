@@ -55,6 +55,8 @@ PASS  a subtype field that is blank on every feature of the older vintage is no 
 ...
 PASS  one polygon with a blank subtype in a vintage that carries it elsewhere for that zone is no answer, not a false CHANGED, while a zone that has no subtype anywhere stays STABLE  <-- pinned defect
 ...
+PASS  a subtype in neither vintage leaves a parcel that is X in both with no answer, as shaded and unshaded X look alike, and the note says how to fix it  <-- pinned defect
+...
 PASS  a point exactly on the line two zones share is UNVERIFIED, neither zone may claim it  <-- pinned defect
 ...
 PASS  exactly one parcel with no answer is exit 5, not a clean 0  <-- pinned defect
@@ -83,10 +85,10 @@ PASS  an unexpected exception exits 70, not the 1 that means review  <-- pinned 
 PASS  the footer reports failures by count and by name, and exits 1  <-- pinned defect
 ...
 --------------------------------------------------------------------
-227 assertions, 0 failed
+233 assertions, 0 failed
 ```
 
-The full run prints all 227 assertions. Each `...` line above is where this block is cut.
+The full run prints all 233 assertions. Each `...` line above is where this block is cut.
 
 ## What already exists
 
@@ -120,11 +122,11 @@ descriptive queries returned nothing again. That shows only that the search foun
 Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no network, no
 database.
 
-The self-test prints the same 227 assertions on Windows with Python 3.13.2, Python 3.12 and
+The self-test prints the same 233 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
-ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1050
-statements and 226 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
+ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1071
+statements and 230 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
 ```
@@ -141,8 +143,10 @@ returns that shape, and `outSR` sets the coordinate system of the returned geome
 ([Query](https://developers.arcgis.com/rest/services-reference/enterprise/query-feature-service-layer/)).
 The ArcGIS Pro tool
 [Features To JSON](https://doc.esri.com/en/arcgis-pro/latest/tool-reference/conversion/features-to-json.html)
-writes Esri JSON by default. I did not run `arcpy`, and that page does not say whether the file
-carries a `spatialReference`. The tool notes a vintage that has none and carries on.
+writes Esri JSON by default, and its summary says that the fields, geometry, and spatial
+reference of features are converted to their JSON representation. I did not run `arcpy`, so I
+did not check a file it wrote. The tool notes a vintage that has no `spatialReference` and
+carries on.
 
 The FEMA layer of flood hazard zones stores its polygons in NAD83 geographic coordinates
 (wkid 4269) and caps a response at 2000 records
@@ -229,7 +233,7 @@ Every parcel lands in exactly one class, and the counts add up to the parcels re
 | `RETRACED` | The zones differ, and the shift is at most `--retrace-distance`. | The line moved. Not a zone change. |
 | `REVIEW` | The shift is between the two distances. | The geometry has no opinion. |
 | `CHANGED` | The shift is above `--change-distance`, or a zone has no counterpart. | A real change. |
-| `UNVERIFIED` | No coordinate, or not inside exactly one zone of each vintage, or the subtype is in one vintage only (below). | No answer, and no guess. |
+| `UNVERIFIED` | No coordinate, or not inside exactly one zone of each vintage, or the subtype is in one vintage only or in neither and the parcel is in zone X (below). | No answer, and no guess. |
 
 The shift of a parcel whose zone differs is the larger of two distances: from the parcel to the
 nearest polygon of its new zone in the old vintage, and from the parcel to the nearest polygon
@@ -252,7 +256,10 @@ subtype, the subtype is left out of the key, and the run prints a note. A parcel
 letter matches in both vintages is then UNVERIFIED if it sits in a zone that has a subtype in
 the vintage that carries it. The letter alone cannot show that a shaded X did not become an
 unshaded one. A parcel in a zone with a blank subtype there is STABLE. When neither vintage
-carries a subtype, the parcels are compared by letter and the note says so.
+carries a subtype, for example because the query left it out of `outFields`, the subtype is
+also left out of the key, and a parcel that is zone X in both vintages is UNVERIFIED, for the
+same reason. Other zones are compared by letter, and the note says so. Pass
+`--subtype-field ""` to accept the letter alone for every zone, X included.
 
 A point exactly on a line that two zones share, or inside two overlapping polygons of different
 zones, is in more than one zone. It is UNVERIFIED. Neither zone may claim it.
@@ -489,6 +496,58 @@ The files hold an AE polygon (blank subtype in both) and an X polygon (blank in 
 inside X. To get a decision, re-export the older vintage
 with the subtype, or pass `--subtype-field ""` to say the letter is enough.
 
+## A subtype in neither vintage
+
+A query that leaves `ZONE_SUBTY` out of `outFields` gives two files with no subtype at all.
+The letter X is then all the tool has, and shaded X and unshaded X look alike. The tool does not
+call the X parcel stable. Save this as `make_none.py` and run it to get the three files:
+
+```python
+import json
+
+
+def rect(x0, y0, x1, y1):
+    return [[x0, y0], [x0, y1], [x1, y1], [x1, y0], [x0, y0]]
+
+
+def layer():
+    return {"spatialReference": {"wkid": 2236}, "features": [
+        {"attributes": {"FLD_ZONE": "AE"},
+         "geometry": {"rings": [rect(0, 0, 1000, 1000)]}},
+        {"attributes": {"FLD_ZONE": "X"},
+         "geometry": {"rings": [rect(1000, 0, 2000, 1000)]}}]}
+
+
+json.dump(layer(), open("none_old.json", "w"))
+json.dump(layer(), open("none_new.json", "w"))
+open("none.csv", "w").write("PARCEL_ID,X,Y\nA-1,500,500\nX-1,1500,500\n")
+```
+
+```
+$ python floodshift.py none_old.json none_new.json none.csv
+floodshift: none_old.json 2 zone(s), none_new.json 2 zone(s), none.csv 2 parcel(s)
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in zone X in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
+parcels read: 2, compared in both vintages: 1
+  STABLE     1
+  RETRACED   0
+  REVIEW     0
+  CHANGED    0
+  UNVERIFIED 1
+retrace distance 30.0 ft, change distance 100.0 ft
+
+a plain overlay reports 0 parcel(s) changed zone
+
+parcels with no answer:
+  X-1  zone X in both vintages, but neither vintage has a subtype, so a move between shaded and unshaded X cannot be seen, line 3
+
+VERDICT: 0 parcel(s) changed zone. No compared parcel has a different zone in the two vintages. 1 of 2 parcel(s) have no answer and are in none of these counts.
+[exit 5]
+```
+
+With `--subtype-field ""` the same files give exit 0 and no parcel without an answer. Only zone X
+is held back. Another zone that has subtypes, such as an `AE` floodway, cannot be found
+without the field, so the note tells you to ask for it.
+
 ## Refusals
 
 The tool says why it stopped, and the exit code is 3.
@@ -621,7 +680,9 @@ refusal described above.
   county-wide layer against a large parcel file will be slow.
 - **Coordinates beyond about 1e300 are not supported.** A polygon with a near-zero height, or a
   coordinate near 1e308, can stop the run with exit 64 or 70, which is never a finding. A
-  coordinate of 1e308 on both sides of a polygon gave exit 64 in my test.
+  coordinate of 1e308 on both sides of a polygon gave exit 64 in my test: a polygon that spans
+  -1e308 to 1e308 on both axes printed `error: cannot convert float NaN to integer`. Other
+  shapes with a 1e308 coordinate ended with exit 5, not 64.
 - **The whole file is read into memory.** There is no streaming.
 - **No `spatialReference` is a note, not a refusal.** A datum difference between vintages that
   share a wkid is invisible to this tool. It shows as a shift, and a uniform one of a few feet
@@ -637,6 +698,12 @@ refusal described above.
   and the full-width forms as well, and warns that Excel may remove quotes or escape characters
   when a CSV is saved and re-opened. This tool writes the file and does not see that later
   save.
+- **A subtype missing from both vintages holds back only zone X.** The run exits 5 when a
+  parcel is X in both vintages. A parcel in another zone that has subtypes, such as an `AE`
+  floodway, is compared by letter. In a sample of 2000 records of the FEMA layer, `AE` carried
+  the subtype `FLOODWAY` on 69 polygons and a blank subtype on 705. A vintage that has both
+  makes a parcel in a blank `AE` polygon UNVERIFIED (next item), so a run can exit 5 on this
+  alone.
 - **A blank subtype on one polygon is no answer.** If a vintage gives a zone letter a subtype on
   some polygons and leaves it blank on others, a parcel in a blank one is UNVERIFIED and the
   run exits 5. The tool takes the blank for a missing value. A zone that is blank on every
@@ -647,8 +714,10 @@ refusal described above.
 - **A parcel id that holds a line feed or a terminal escape sequence can add lines to the printed
   report,** including a line that looks like a verdict. The last `VERDICT` line is the tool's,
   and `--out` is not affected.
-- **If the reader of stdout closes the pipe early,** for example `| head`, the run ends with
-  exit 70 and a traceback. Read the exit code of floodshift, not of the pipe.
+- **If the reader of stdout closes the pipe early,** for example `| head`, a long report ends
+  with exit 70 and a traceback. A short report does not: it is written before the pipe closes,
+  and the run ends with its normal exit code. It takes output larger than the pipe buffer (20000
+  parcels with `--sample 20000` did it). Read the exit code of floodshift, not of the pipe.
 - **An id that really starts with an apostrophe and then `=`, `+`, `-`, `@`, a tab or a
   carriage return loses that apostrophe when it is read back.** The reader cannot tell it from
   the apostrophe the writer added. An id of `'Q` and an id of `A'=1` are not affected. If a file
@@ -659,11 +728,20 @@ refusal described above.
   also exit 64, because the usage handler catches the internal `ValueError`; it is not exit 70.
 - **A dry run checks only that `--out` does not exist.** The folder of `--out` is not checked
   until `--apply`, which exits 2 if the folder is missing.
+- **Two ids that differ only by a leading tab, carriage return or space are one id.** The
+  reader strips the id, so a tab then `=cmd` and `=cmd` are refused as a duplicate id (exit 3).
+  This is a false refusal, never a false clean.
+- **Save both vintages as UTF-8.** A UTF-16 file, such as one written by PowerShell 5
+  redirection, is refused as not valid JSON, and the message does not name the encoding.
+- **A zone label with an unpaired surrogate escape in the JSON cannot be written as UTF-8.**
+  `--apply` then exits 70 and leaves a partial `--out` file. Delete it before re-running.
+- **A feature with no attributes at all exits 64** and names the missing field. Request
+  `outFields` that include the zone field.
 - **A crash prints a Python traceback to stderr.** The traceback holds local file paths and no
   credential. The exit code is 70.
 - **The output CSV is UTF-8 without a byte order mark.** Import it as UTF-8 in Excel, or a
   non-ASCII parcel id can show as garbled text.
-- **Interpreters re-run.** The 227 assertions were re-run on Windows with Python 3.13.2, 3.12
+- **Interpreters re-run.** The 233 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
   holds no credential, so there is no stub server. The self-test disables `socket.socket` while
