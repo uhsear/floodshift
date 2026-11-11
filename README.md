@@ -305,7 +305,7 @@ east of the old line. `C-1` and `V-1` are in the AH area that became X.
 ```
 $ python floodshift.py old.json new.json parcels.csv
 floodshift: old.json 3 zone(s), new.json 4 zone(s), parcels.csv 6 parcel(s)
-NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in zone X in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
 parcels read: 6, compared in both vintages: 4
   STABLE     1
   RETRACED   1
@@ -344,7 +344,7 @@ parcels with no answer still keep the run from a clean exit, so the code is 5, n
 ```
 $ python floodshift.py old.json new.json parcels.csv --change-distance 60
 floodshift: old.json 3 zone(s), new.json 4 zone(s), parcels.csv 6 parcel(s)
-NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in zone X in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
 parcels read: 6, compared in both vintages: 4
   STABLE     1
   RETRACED   1
@@ -553,9 +553,9 @@ without the field, so the note tells you to ask for it.
 The tool says why it stopped, and the exit code is 3.
 
 **A response the server cut short.** `cut.json` is `new.json` with `"exceededTransferLimit": true`.
-A real query against the FEMA layer with `resultRecordCount=5` returned that member, and this
-tool refused the file with the same message. The same query without the limit returned 19
-polygons and no such member.
+On 2026-10-29 a query against the FEMA layer with `resultRecordCount=5` returned that member (see
+"The live service"). The tool refuses a file that carries it, with the message below. The
+self-test checks the refusal on a synthetic file and does not call the service.
 
 ```
 $ python floodshift.py old.json cut.json parcels.csv
@@ -598,7 +598,7 @@ are in a different coordinate system. This is exit 4. It is never a clean run.
 ```
 $ python floodshift.py old.json new.json far.csv
 floodshift: old.json 3 zone(s), new.json 4 zone(s), far.csv 1 parcel(s)
-NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in zone X in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
 parcels read: 1, compared in both vintages: 0
   STABLE     0
   RETRACED   0
@@ -647,8 +647,8 @@ refusal described above.
   can read as none. Check the parcels' CRS yourself.
 - **Exit 0 means every parcel was decided, not that no zone changed.** A CI job cannot gate on
   confirmed changes with the exit code. Read the CHANGED count or `--out`.
-- **Rows with no id and no coordinates count as parcels with no answer.** Excel often writes a
-  trailing row of only commas. It becomes a parcel with no id and no coordinates, which is
+- **Rows with no id and no coordinates count as parcels with no answer.** A spreadsheet export can end with a
+  row of only commas. It becomes a parcel with no id and no coordinates, which is
   UNVERIFIED and turns an otherwise clean run into exit 5. Delete blank spreadsheet rows first.
 - **Coordinates are parsed with Python's `float()`,** which accepts forms such as `1_000` and
   non-ASCII digits. A full-width number is read as a coordinate.
@@ -659,7 +659,8 @@ refusal described above.
 - **A CSV with two columns of the same name keeps the last one** without a warning. This is how
   Python's `csv.DictReader` behaves.
 - **A NUL byte in a parcel file** is exit 2 on Python 3.9, where the csv module rejects it.
-  Python 3.13 reads it. The self-test count is the same on both.
+  Python 3.13 reads it. A NUL in a coordinate cell leaves that parcel with no usable coordinate,
+  so a one-parcel file exits 4 on 3.13. The self-test count is the same on both.
 - **Field names must match in case.** A service that returns `fld_zone` gets exit 64 naming the
   field, not a silent mismatch.
 - **Only plain Esri JSON polygon rings are accepted.** A geometry with `curveRings`, and GeoJSON,
@@ -700,8 +701,9 @@ refusal described above.
   save.
 - **A subtype missing from both vintages holds back only zone X.** The run exits 5 when a
   parcel is X in both vintages. A parcel in another zone that has subtypes, such as an `AE`
-  floodway, is compared by letter. In a sample of 2000 records of the FEMA layer, `AE` carried
-  the subtype `FLOODWAY` on 69 polygons and a blank subtype on 705. A vintage that has both
+  floodway, is compared by letter. In one undated sample of 2000 records of the FEMA layer, with no query recorded,
+  `AE` carried the subtype `FLOODWAY` on 69 polygons and a blank subtype on 705. The self-test
+  cannot reproduce that count. A vintage that has both
   makes a parcel in a blank `AE` polygon UNVERIFIED (next item), so a run can exit 5 on this
   alone.
 - **A blank subtype on one polygon is no answer.** If a vintage gives a zone letter a subtype on
@@ -728,6 +730,11 @@ refusal described above.
   also exit 64, because the usage handler catches the internal `ValueError`; it is not exit 70.
 - **A dry run checks only that `--out` does not exist.** The folder of `--out` is not checked
   until `--apply`, which exits 2 if the folder is missing.
+- **The apostrophe strip applies to every parcel CSV, not only to the `--out` file.** A source
+  file whose ids carry a real apostrophe before `=`, `+`, `-`, `@`, a tab or a carriage return is
+  read with that apostrophe removed.
+- **Any unexpected error while writing `--out` exits 70 and can leave a partial file.** Delete
+  it before re-running, because `--out` must not exist.
 - **Two ids that differ only by a leading tab, carriage return or space are one id.** The
   reader strips the id, so a tab then `=cmd` and `=cmd` are refused as a duplicate id (exit 3).
   This is a false refusal, never a false clean.
@@ -735,8 +742,9 @@ refusal described above.
   redirection, is refused as not valid JSON, and the message does not name the encoding.
 - **A zone label with an unpaired surrogate escape in the JSON cannot be written as UTF-8.**
   `--apply` then exits 70 and leaves a partial `--out` file. Delete it before re-running.
-- **A feature with no attributes at all exits 64** and names the missing field. Request
-  `outFields` that include the zone field.
+- **A feature with no attributes at all is refused (exit 3)** with "feature N has no
+  attributes", which names no field. A feature that has attributes but lacks the zone field exits
+  64 and names the field. Request `outFields` that include the zone field.
 - **A crash prints a Python traceback to stderr.** The traceback holds local file paths and no
   credential. The exit code is 70.
 - **The output CSV is UTF-8 without a byte order mark.** Import it as UTF-8 in Excel, or a
