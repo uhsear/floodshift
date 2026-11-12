@@ -127,8 +127,7 @@ database.
 The self-test prints the same 241 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
-ends it with LF. Python documents this: a text stream with `newline=None` translates `
-` on
+ends it with LF. Python documents this: a text stream with `newline=None` translates `\n` on
 output to `os.linesep`
 ([io.TextIOWrapper](https://docs.python.org/3/library/io.html#io.TextIOWrapper)). `coverage run --branch floodshift.py --self-test` reports 100 percent of 1094
 statements and 234 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
@@ -436,7 +435,7 @@ floodshift.py: error: unrecognized arguments: --ap
 
 A spreadsheet reads a cell as a formula when its text starts with `=`, `+`, `-`, `@`, a tab or
 a carriage return
-([OWASP, CSV Injection](https://owasp.org/www-community/attacks/CSV_Injection) lists these
+([OWASP, CSV Injection](https://community.owasp.org/attacks/CSV_Injection) lists these
 characters and the single-quote prefix as the defence). Every text column of `--out` is written
 with one leading apostrophe when it starts with one of the six: `parcel_id`, `old_zone`,
 `new_zone` and `reason`. The numeric columns (`line`, `x`, `y`, `shift`) are not touched, so a
@@ -756,6 +755,16 @@ can exit 5 on this alone.
   with exit 70 and a traceback. A short report does not: it is written before the pipe closes,
   and the run ends with its normal exit code. It takes output larger than the pipe buffer (20000
   parcels with `--sample 20000` did it). Read the exit code of floodshift, not of the pipe.
+  The same holds for `--self-test`: its final PASS print fails on a closed pipe and the run
+  ends with exit 70, so read its exit code, not the pipe's.
+- **Only comma-delimited parcel files are read.** A first line of `sep=,` or a semicolon
+  delimiter is refused with exit 64 and a "columns not in the CSV" message that shows the real
+  header.
+- **The refusal for `curveRings` does not name curves.** It is the general message that the
+  geometry is not polygon rings of at least 3 finite points each. A geometry that carries both
+  `rings` and `curveRings` was not tested.
+- **`floodshift.py` and `LICENSE` have CRLF line endings in a Windows working tree** with
+  `core.autocrlf=true`. The git index holds LF, so the published files are not affected.
 - **An id that really starts with an apostrophe and then `=`, `+`, `-`, `@`, a tab or a
   carriage return loses that apostrophe when it is read back.** The reader cannot tell it from
   the apostrophe the writer added. An id of `'Q` and an id of `A'=1` are not affected. If a file
@@ -774,8 +783,9 @@ can exit 5 on this alone.
 - **The numeric `x` and `y` columns are not guarded.** A negative coordinate starts with a minus
   sign (for example `-5.0`). A CSV linter that flags every cell that starts with `-` flags
   these, but a spreadsheet reads them as numbers.
-- **Exit 64 covers an empty parcel file and a missing column.** An empty parcel file, or one
-  that lacks a column you named, exits 64 (usage) and not 2 or 3. A coordinate near 1e308 can
+- **Exit 64 covers an empty parcel file and a missing column.** A zero-byte parcel file, or one
+  that lacks a column you named, exits 64 (usage) and not 2 or 3. A parcel file with a header
+  and no rows exits 4, because nothing was compared. A coordinate near 1e308 can
   also exit 64, because the usage handler catches the internal `ValueError`; it is not exit 70.
 - **A dry run checks only that `--out` does not exist.** The folder of `--out` is not checked
   until `--apply`, which exits 2 if the folder is missing.
