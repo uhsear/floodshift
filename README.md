@@ -65,6 +65,9 @@ PASS  and a parcel that is AE in both is no answer either, as a floodway inside 
 ...
 PASS  exceededTransferLimit true is refused, the server cut the answer short  <-- pinned defect
 ...
+PASS  a geometry with curveRings and no rings is refused
+PASS  a geometry with both rings and curveRings is read from rings and curveRings is ignored
+...
 PASS  vintages in 2236 and 3857 are refused  <-- pinned defect
 ...
 PASS  exactly one parcel with no answer is exit 5, not a clean 0  <-- pinned defect
@@ -88,10 +91,10 @@ PASS  an unexpected exception exits 70, not the 1 that means review  <-- pinned 
 PASS  the footer reports failures by count and by name, and exits 1  <-- pinned defect
 ...
 --------------------------------------------------------------------
-242 assertions, 0 failed
+244 assertions, 0 failed
 ```
 
-The full run prints all 242 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
+The full run prints all 244 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
 
 ## What already exists
 
@@ -125,12 +128,12 @@ descriptive queries returned nothing again. That shows only that the search foun
 Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no network, no
 database.
 
-The self-test prints the same 242 assertions on Windows with Python 3.13.2, Python 3.12 and
+The self-test prints the same 244 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
 ends it with LF. Python documents this: a text stream with `newline=None` translates `\n` on
 output to `os.linesep`
-([io.TextIOWrapper](https://docs.python.org/3/library/io.html#io.TextIOWrapper)). `coverage run --branch floodshift.py --self-test` reports 100 percent of 1101
+([io.TextIOWrapper](https://docs.python.org/3/library/io.html#io.TextIOWrapper)). `coverage run --branch floodshift.py --self-test` reports 100 percent of 1105
 statements and 234 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
@@ -152,7 +155,7 @@ short, with a `resultPaginationToken` that "can be used in subsequent requests t
 [geometry objects](https://developers.arcgis.com/rest/services-reference/enterprise/geometry-objects/)
 page says "the JSON wkid property will always be the value that was originally assigned to an
 SR when it was created" and that `latestWkid` "identifies the current WKID value". A polygon
-may hold `curveRings` as well as `rings`, and the tool refuses `curveRings`. The Query page's
+holds either `rings` or `curveRings`. The tool refuses a geometry with `curveRings` and no `rings`, and when both are present it reads `rings` and ignores `curveRings`. The Query page's
 `returnTrueCurves` parameter, when false (the default), converts curves to densified polygons.
 The ArcGIS Pro tool
 [Features To JSON](https://doc.esri.com/en/arcgis-pro/latest/tool-reference/conversion/features-to-json.html)
@@ -868,7 +871,7 @@ can exit 5 on this alone.
   "columns not in the CSV" and shows the header as garbled text. Save the parcel file as UTF-8.
 - **An interrupted run is not mapped to a tool exit code.** Ctrl+C prints a Python traceback and
   ends with the interpreter's own status (130 in my Windows test), not 70.
-- **Interpreters re-run.** The 242 assertions were re-run on Windows with Python 3.13.2, 3.12
+- **Interpreters re-run.** The 244 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
   holds no credential, so there is no stub server. The self-test disables `socket.socket` while

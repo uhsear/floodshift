@@ -1609,6 +1609,18 @@ def _self_test(tmp):
         refused(lambda g=geometry: parse_vintage(
             fset([{"attributes": {"FLD_ZONE": "AE"}, "geometry": g}]), "v"),
             "a geometry of %s is refused" % json.dumps(geometry)[:40])
+    curve = [[0, 0], [1, 1], [2, 0]]
+    refused(lambda: parse_vintage(fset([{"attributes": {"FLD_ZONE": "AE"},
+                                         "geometry": {"curveRings": [curve]}}]),
+                                  "v"),
+            "a geometry with curveRings and no rings is refused")
+    both = parse_vintage(fset([{"attributes": {"FLD_ZONE": "AE"},
+                                "geometry": {"rings": [rect(0, 0, 1, 1)],
+                                             "curveRings": [curve]}}]), "v")
+    check(len(both.zones) == 1 and both.zones[0].rings == [
+          [(float(x), float(y)) for x, y in rect(0, 0, 1, 1)]],
+          "a geometry with both rings and curveRings is read from rings and "
+          "curveRings is ignored")
     v = parse_vintage({"features": [{"attributes": {"FLD_ZONE": "AE",
                                                     "ZONE_SUBTY": None},
                                      "geometry": {"rings": [rect(0, 0, 1, 1)],
