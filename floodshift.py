@@ -49,6 +49,7 @@ import shutil
 import sys
 import tempfile
 import traceback
+from fractions import Fraction
 
 # =============================================================================
 # CONFIGURATION. Deliberately not flags. Change here, not at the call site.
@@ -167,13 +168,30 @@ def seg_distance(px, py, ax, ay, bx, by):
 
 
 def _on_edge(px, py, ax, ay, bx, by):
-    """True when the point lies exactly on the segment a-b."""
-    if (bx - ax) * (py - ay) - (by - ay) * (px - ax) != 0.0:
+    """True when the point lies exactly on the segment a-b.
+
+    The float cross product is the quick test. Rounding can hide a zero in
+    it or invent one, so a value inside its error bound is decided again
+    with exact rational arithmetic on the float inputs. A decimal coordinate
+    such as 49.2333... is rarely a dyadic fraction, so the float product of
+    a point that is exactly on a slanted line is often not zero.
+    """
+    if not (min(ax, bx) <= px <= max(ax, bx)
+            and min(ay, by) <= py <= max(ay, by)):
         return False
-    return min(ax, bx) <= px <= max(ax, bx) and min(ay, by) <= py <= max(ay, by)
+    left, right = (bx - ax) * (py - ay), (by - ay) * (px - ax)
+    if abs(left - right) > _CROSS_ERROR * (abs(left) + abs(right)):
+        return False
+    return ((Fraction(bx) - Fraction(ax)) * (Fraction(py) - Fraction(ay))
+            == (Fraction(by) - Fraction(ay)) * (Fraction(px) - Fraction(ax)))
 
 
 OUTSIDE, INSIDE, EDGE = 0, 1, 2
+
+# Shewchuk's bound for a float 2x2 determinant is about 3.3e-16 times the sum
+# of the two products; this is a little wider, which only costs a few exact
+# checks.
+_CROSS_ERROR = 1e-15
 
 
 def edges_of(rings):
@@ -286,6 +304,7 @@ class Vintage(object):
         self.bare = False
         self.by_key = {}
         self.gaps = set()
+        self.subtyped = set()
 
     def index(self, use_subtype):
         """Fix the key of every zone and group the zones by it."""
@@ -296,6 +315,7 @@ class Vintage(object):
         # a letter with a blank polygon and a filled one in one vintage has
         # a missing value, not a hazard that has no subtype
         self.gaps = set()
+        self.subtyped = set(z.zone for z in self.zones if z.subtype)
         if use_subtype:
             self.gaps = (set(z for (z, s) in self.by_key if not s)
                          & set(z for (z, s) in self.by_key if s))
@@ -316,16 +336,6 @@ class Vintage(object):
                 if zone.state(px, py) != OUTSIDE:
                     keys.add(zone.key)
         return keys
-
-    def subtype_at(self, px, py):
-        """The non-blank subtypes of the zones that hold the point."""
-        found = set()
-        for zone in self.zones:
-            x0, y0, x1, y1 = zone.bbox
-            if (zone.subtype and x0 <= px <= x1 and y0 <= py <= y1
-                    and zone.state(px, py) != OUTSIDE):
-                found.add(zone.subtype)
-        return found
 
     def distance_to(self, key, px, py):
         """Distance to the nearest polygon of this zone key, or inf when this
@@ -588,7 +598,7 @@ def judge(parcel, old, new, retrace, change, units):
                       "the zone cannot be matched" % gap[0])
     if a == b:
         blind = [which for which, v in (("old", old), ("new", new))
-                 if v.lone and v.subtype_at(parcel.x, parcel.y)]
+                 if v.lone and a[0] in v.subtyped]
         if blind:
             return Result(parcel, UNVERIFIED,
                           "the same zone letter in both vintages, but only "
@@ -1214,6 +1224,31 @@ def _self_test(tmp):
     check(one(o, n, 0, 500).cls == STABLE,
           "a point on the outer edge of the only zone around it is inside "
           "it")
+    # two zones share the slanted edge (20.8, 24.5)-(74.2, 98.7); the point
+    # is exactly on it, but 38.6 and 49.2333... are not dyadic fractions, so
+    # the float cross product is not zero
+    slant = [[20.8, 24.5], [74.2, 98.7]]
+    shared = [feat("AE", [slant + [[10.0, 60.0]]]),
+              feat("VE", [slant + [[70.8, 25.5]]])]
+    o, n, _ = pair(shared, shared)
+    px, py = 38.6, 49.233333333333334
+    check((74.2 - 20.8) * (py - 24.5) - (98.7 - 24.5) * (px - 20.8) != 0.0
+          and (Fraction(74.2) - Fraction(20.8)) * (Fraction(py) - Fraction(24.5))
+          == (Fraction(98.7) - Fraction(24.5)) * (Fraction(px) - Fraction(20.8)),
+          "the fixture point is exactly on the slanted line while its float "
+          "cross product is not zero")
+    r = one(o, n, px, py)
+    check(r.cls == UNVERIFIED and "more than one zone of the old" in r.reason
+          and "AE, VE" in r.reason,
+          "a point exactly on a slanted line two zones share is UNVERIFIED "
+          "although the float cross product is not zero  "
+          "<-- pinned defect")
+    check(one(o, n, px, math.nextafter(py, math.inf)).cls == STABLE,
+          "and a point one float step off that line is not on it")
+    check(not _on_edge(38.6, 49.3, 20.8, 24.5, 74.2, 98.7)
+          and not _on_edge(80.0, 105.0, 20.8, 24.5, 74.2, 98.7),
+          "a point well off the line, and one on its extension beyond the "
+          "end, is not on the segment")
     r = one(o, n, 3000, 500)
     check(r.cls == UNVERIFIED and "in no zone of the old" in r.reason
           and "in no zone of the new" in r.reason and "; " in r.reason,
@@ -1399,6 +1434,21 @@ def _self_test(tmp):
     r = one(n, o, 1500, 500)
     check(r.cls == UNVERIFIED and "of the old vintage" in r.reason,
           "and the same when the blank polygon is in the old vintage")
+    lone_rows = [feat("X", [rect(0, 0, 1000, 1000)], minimal),
+                 feat("X", [rect(1000, 0, 2000, 1000)], ""),
+                 feat("AE", [rect(2000, 0, 3000, 1000)], "")]
+    bare_rows = [feat("X", [rect(0, 0, 2000, 1000)]),
+                 feat("AE", [rect(2000, 0, 3000, 1000)])]
+    for lone_first in (True, False):
+        o, n, notes = (pair(lone_rows, bare_rows) if lone_first
+                       else pair(bare_rows, lone_rows))
+        side = lambda x: one(o, n, x, 500)
+        check(len(notes) == 1 and side(500).cls == UNVERIFIED
+              and side(1500).cls == UNVERIFIED and side(2500).cls == STABLE,
+              "a blank polygon of a zone that has a subtype elsewhere in the "
+              "only vintage that carries one is no answer, as the filled "
+              "polygon is, and a zone with no subtype there stays STABLE  "
+              "<-- pinned defect")
     o, n, notes = pair([feat("AE", [rect(0, 0, 1000, 1000)], "FLOODWAY"),
                         feat("X", [rect(1000, 0, 2000, 1000)], minimal)],
                        [feat("AE", [rect(0, 0, 1000, 1000)], "FLOODWAY"),

@@ -50,11 +50,13 @@ PASS  ' ae ' and 'AE' are one zone, a stray space is no flood change  <-- pinned
 PASS  unshaded X becoming shaded X is CHANGED, the zone letter alone would call it STABLE  <-- pinned defect
 ...
 PASS  a point exactly on the line two zones share is UNVERIFIED, neither zone may claim it  <-- pinned defect
+PASS  a point exactly on a slanted line two zones share is UNVERIFIED although the float cross product is not zero  <-- pinned defect
 ...
 PASS  a subtype in one vintage only does not make the same zone two zones, and the zone letter alone is no answer  <-- pinned defect
 ...
 PASS  a subtype field that is blank on every feature of the older vintage is no subtype, so a filled newer one is no false CHANGED  <-- pinned defect
 PASS  one polygon with a blank subtype in a vintage that carries it elsewhere for that zone is no answer, not a false CHANGED, while a zone that has no subtype anywhere stays STABLE  <-- pinned defect
+PASS  a blank polygon of a zone that has a subtype elsewhere in the only vintage that carries one is no answer, as the filled polygon is, and a zone with no subtype there stays STABLE  <-- pinned defect
 ...
 PASS  a zone letter blank on every polygon of the new vintage and filled in the old is no answer, not a false CHANGED, while another zone stays STABLE  <-- pinned defect
 ...
@@ -85,10 +87,10 @@ PASS  an unexpected exception exits 70, not the 1 that means review  <-- pinned 
 PASS  the footer reports failures by count and by name, and exits 1  <-- pinned defect
 ...
 --------------------------------------------------------------------
-235 assertions, 0 failed
+241 assertions, 0 failed
 ```
 
-The full run prints all 235 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
+The full run prints all 241 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
 
 ## What already exists
 
@@ -122,10 +124,13 @@ descriptive queries returned nothing again. That shows only that the search foun
 Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no network, no
 database.
 
-The self-test prints the same 235 assertions on Windows with Python 3.13.2, Python 3.12 and
+The self-test prints the same 241 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
-ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1079
+ends it with LF. Python documents this: a text stream with `newline=None` translates `
+` on
+output to `os.linesep`
+([io.TextIOWrapper](https://docs.python.org/3/library/io.html#io.TextIOWrapper)). `coverage run --branch floodshift.py --self-test` reports 100 percent of 1094
 statements and 234 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
@@ -262,18 +267,24 @@ the subtype holds.
 A vintage carries the subtype when at least one of its features has a value there. A field that
 is present and blank on every feature carries nothing. When only one vintage carries the
 subtype, the subtype is left out of the key, and the run prints a note. A parcel whose zone
-letter matches in both vintages is then UNVERIFIED if it sits in a zone that has a subtype in
-the vintage that carries it. The letter alone cannot show that a shaded X did not become an
-unshaded one. A parcel in a zone with a blank subtype there is STABLE, unless the other vintage
-fills the subtype for that zone letter: a blank is then a missing value and the parcel is
-UNVERIFIED. When neither vintage
+letter matches in both vintages is then UNVERIFIED if its zone letter has a subtype anywhere in
+the vintage that carries it, on the parcel's polygon or on another polygon of that letter, because
+a blank next to a filled value is a missing value. The letter alone cannot show that a shaded X
+did not become an unshaded one. A parcel in a zone letter that has no subtype anywhere in that
+vintage is STABLE, unless the other vintage fills the subtype for that letter: a blank is then a
+missing value and the parcel is UNVERIFIED. When neither vintage
 carries a subtype, for example because the query left it out of `outFields`, the subtype is
 also left out of the key, and a parcel that is zone X in both vintages is UNVERIFIED, for the
 same reason. Other zones are compared by letter, and the note says so. Pass
 `--subtype-field ""` to accept the letter alone for every zone, X included.
 
 A point exactly on a line that two zones share, or inside two overlapping polygons of different
-zones, is in more than one zone. It is UNVERIFIED. Neither zone may claim it.
+zones, is in more than one zone. It is UNVERIFIED. Neither zone may claim it. "Exactly on" is
+decided on the coordinates as stored: the tool takes the float cross product first and, when
+that is too close to zero to trust, decides again with exact rational arithmetic
+([`fractions`](https://docs.python.org/3/library/fractions.html), which holds a float without
+rounding it). A decimal coordinate such as 49.2333... is not stored exactly, so the exact test is
+on the stored value and not on the decimal you typed. A point one float step off a line is not on it.
 
 Polygon rings use the even-odd rule, so a hole is a hole whichever way the ring is wound. Esri
 documents that rule as the one that draws its polygons correctly, and says a ring's first
@@ -443,11 +454,12 @@ self-test writes a file with ids `=A`, `+B`, `-C`, `@D`, a tab id, a carriage re
 claimed: the `line` column can differ, because a bare carriage return inside an id is a line
 break in the first file and is gone from the second.
 
-None of the six reaches the output from a file today through a tab or a carriage return. The
-reader strips the white space around a parcel id, and the zone reader collapses white space in a
-label, so a leading tab or carriage return is gone before the writer sees it. The tab and
-carriage return guard is there for the next code path, and the self-test reaches it through
-`classified_rows` directly. The `=`, `+`, `-` and `@` cases are reached end to end through the
+A leading tab or carriage return never reaches the writer from a file, so those two guards are
+proven through `classified_rows`. The reader strips the white space around a parcel id, and the
+zone reader collapses white space in a label, so a leading tab or carriage return is gone before
+the writer sees it. A tab followed by `=AE` in a zone label is read as `=AE` and written as
+`'=AE`, which is the `=` guard working. The tab and carriage return guard is there for the next
+code path, and the self-test reaches it through `classified_rows` directly. The `=`, `+`, `-` and `@` cases are reached end to end through the
 CLI. The `reason` text always begins with a fixed word, and the guard on it is the same belt
 and braces.
 
@@ -661,6 +673,12 @@ refusal described above.
 - **Rows with no id and no coordinates count as parcels with no answer.** A spreadsheet export can end with a
   row of only commas. It becomes a parcel with no id and no coordinates, which is
   UNVERIFIED and turns an otherwise clean run into exit 5. Delete blank spreadsheet rows first.
+- **Rows with no id are not checked for duplicates.** Two rows that have a coordinate and no id are
+  both judged and printed as `(no id)`, and the run can exit 0 with both counted. Give every
+  parcel an id before you rely on the counts.
+- **A parcel cell longer than 131072 characters stops the run with exit 2.** The message is
+  `field larger than field limit (131072)`, which is the `csv` module's default limit and names
+  no fix. Shorten the cell or remove the column.
 - **Coordinates are parsed with Python's `float()`,** which accepts forms such as `1_000` and
   non-ASCII digits. A full-width number is read as a coordinate.
 - **Save the parcel CSV as UTF-8.** CSV and JSON are decoded with replacement characters.
@@ -723,7 +741,9 @@ can exit 5 on this alone.
 - **A blank subtype on one polygon is no answer.** If a vintage gives a zone letter a subtype on
   some polygons and leaves it blank on others, a parcel in a blank one is UNVERIFIED and the
   run exits 5. The tool takes the blank for a missing value. A zone that is blank on every
-  polygon of both vintages, such as a plain `AE`, is still compared. A zone letter that is blank
+  polygon of both vintages, such as a plain `AE`, is still compared. The same holds when only one
+  vintage carries a subtype at all: a parcel in a blank polygon of a zone letter that has a
+  subtype on another polygon of that vintage is UNVERIFIED. A zone letter that is blank
   on every polygon of one vintage while the other vintage fills it is the same gap, and a parcel
   in the blank polygon is UNVERIFIED, not CHANGED.
 - **A paged response is checked only through `exceededTransferLimit`.** A page that was never
@@ -788,9 +808,17 @@ can exit 5 on this alone.
   not a refusal. It is a tool-fault code, never a false clean.
 - **A crash prints a Python traceback to stderr.** The traceback holds local file paths and no
   credential. The exit code is 70.
+- **A parcel with a located coordinate can still count as not compared.** When every parcel is
+  inside a zone of both vintages but all of them are UNVERIFIED, for example zone X in both
+  vintages with no subtype anywhere, the verdict reads `NOTHING COMPARED` and says the geometry
+  checked nothing, which is not what happened. The exit code is 4, so the run is never clean,
+  and the per-parcel lines give the real reason.
+- **A byte order mark inside an id is not stripped and not guarded.** A U+FEFF character before
+  `=` is written as it is. A spreadsheet does not read it as a formula lead, so this affects the
+  look of the id only. A byte order mark at the start of the parcel file is removed by the reader.
 - **The output CSV is UTF-8 without a byte order mark.** Import it as UTF-8 in Excel, or a
   non-ASCII parcel id can show as garbled text.
-- **Interpreters re-run.** The 235 assertions were re-run on Windows with Python 3.13.2, 3.12
+- **Interpreters re-run.** The 241 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
   holds no credential, so there is no stub server. The self-test disables `socket.socket` while
