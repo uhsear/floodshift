@@ -49,34 +49,34 @@ PASS  ' ae ' and 'AE' are one zone, a stray space is no flood change  <-- pinned
 ...
 PASS  unshaded X becoming shaded X is CHANGED, the zone letter alone would call it STABLE  <-- pinned defect
 ...
+PASS  a point exactly on the line two zones share is UNVERIFIED, neither zone may claim it  <-- pinned defect
+...
 PASS  a subtype in one vintage only does not make the same zone two zones, and the zone letter alone is no answer  <-- pinned defect
 ...
 PASS  a subtype field that is blank on every feature of the older vintage is no subtype, so a filled newer one is no false CHANGED  <-- pinned defect
-...
 PASS  one polygon with a blank subtype in a vintage that carries it elsewhere for that zone is no answer, not a false CHANGED, while a zone that has no subtype anywhere stays STABLE  <-- pinned defect
 ...
+PASS  a zone letter blank on every polygon of the new vintage and filled in the old is no answer, not a false CHANGED, while another zone stays STABLE  <-- pinned defect
+...
 PASS  a subtype in neither vintage leaves a parcel that is X in both with no answer, as shaded and unshaded X look alike, and the note says how to fix it  <-- pinned defect
-...
-PASS  a point exactly on the line two zones share is UNVERIFIED, neither zone may claim it  <-- pinned defect
-...
-PASS  exactly one parcel with no answer is exit 5, not a clean 0  <-- pinned defect
-PASS  a point on a horizontal line two zones share is UNVERIFIED, and one on the top or bottom edge of the only zone is inside it  <-- pinned defect
 ...
 PASS  exceededTransferLimit true is refused, the server cut the answer short  <-- pinned defect
 ...
 PASS  vintages in 2236 and 3857 are refused  <-- pinned defect
 ...
-PASS  --out without --apply writes nothing  <-- pinned defect
+PASS  exactly one parcel with no answer is exit 5, not a clean 0  <-- pinned defect
+PASS  a point on a horizontal line two zones share is UNVERIFIED, and one on the top or bottom edge of the only zone is inside it  <-- pinned defect
 ...
 PASS  a tab at the start of the id, both zones and the reason gets an apostrophe and the number columns do not  <-- pinned defect
 ...
-PASS  the --out file fed back to the tool gives the same ids, classes, zones and coordinates, and the report names the id without the apostrophe  <-- pinned defect
+PASS  --out without --apply writes nothing  <-- pinned defect
 ...
+PASS  the --out file fed back to the tool gives the same ids, classes, zones and coordinates, and the report names the id without the apostrophe  <-- pinned defect
 PASS  a prefix of a flag, --ap, is refused and not read as the full flag  <-- pinned defect
 ...
-PASS  a subtype blank in the older file and filled in the newer is exit 5 with the X parcel UNVERIFIED, not a CHANGED one  <-- pinned defect
-...
 PASS  parcels nowhere near the zones are exit 4 with a hint  <-- pinned defect
+...
+PASS  a subtype blank in the older file and filled in the newer is exit 5 with the X parcel UNVERIFIED, not a CHANGED one  <-- pinned defect
 ...
 PASS  a parcel id on two lines is refused and names the lines  <-- pinned defect
 ...
@@ -85,10 +85,10 @@ PASS  an unexpected exception exits 70, not the 1 that means review  <-- pinned 
 PASS  the footer reports failures by count and by name, and exits 1  <-- pinned defect
 ...
 --------------------------------------------------------------------
-233 assertions, 0 failed
+235 assertions, 0 failed
 ```
 
-The full run prints all 233 assertions. Each `...` line above is where this block is cut.
+The full run prints all 235 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
 
 ## What already exists
 
@@ -122,11 +122,11 @@ descriptive queries returned nothing again. That shows only that the search foun
 Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no network, no
 database.
 
-The self-test prints the same 233 assertions on Windows with Python 3.13.2, Python 3.12 and
+The self-test prints the same 235 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
-ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1071
-statements and 230 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
+ends it with LF. `coverage run --branch floodshift.py --self-test` reports 100 percent of 1079
+statements and 234 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
 ```
@@ -264,7 +264,9 @@ is present and blank on every feature carries nothing. When only one vintage car
 subtype, the subtype is left out of the key, and the run prints a note. A parcel whose zone
 letter matches in both vintages is then UNVERIFIED if it sits in a zone that has a subtype in
 the vintage that carries it. The letter alone cannot show that a shaded X did not become an
-unshaded one. A parcel in a zone with a blank subtype there is STABLE. When neither vintage
+unshaded one. A parcel in a zone with a blank subtype there is STABLE, unless the other vintage
+fills the subtype for that zone letter: a blank is then a missing value and the parcel is
+UNVERIFIED. When neither vintage
 carries a subtype, for example because the query left it out of `outFields`, the subtype is
 also left out of the key, and a parcel that is zone X in both vintages is UNVERIFIED, for the
 same reason. Other zones are compared by letter, and the note says so. Pass
@@ -721,7 +723,9 @@ can exit 5 on this alone.
 - **A blank subtype on one polygon is no answer.** If a vintage gives a zone letter a subtype on
   some polygons and leaves it blank on others, a parcel in a blank one is UNVERIFIED and the
   run exits 5. The tool takes the blank for a missing value. A zone that is blank on every
-  polygon of both vintages, such as a plain `AE`, is still compared.
+  polygon of both vintages, such as a plain `AE`, is still compared. A zone letter that is blank
+  on every polygon of one vintage while the other vintage fills it is the same gap, and a parcel
+  in the blank polygon is UNVERIFIED, not CHANGED.
 - **A paged response is checked only through `exceededTransferLimit`.** A page that was never
   joined into the file gives no refusal, so a missing region can make a parcel next to its
   border read as CHANGED. Join every page and check the polygon count yourself.
@@ -767,14 +771,26 @@ can exit 5 on this alone.
   redirection, is refused as not valid JSON, and the message does not name the encoding.
 - **A zone label with an unpaired surrogate escape in the JSON cannot be written as UTF-8.**
   `--apply` then exits 70 and leaves a partial `--out` file. Delete it before re-running.
-- **A feature with no attributes at all is refused (exit 3)** with "feature N has no
-  attributes", which names no field. A feature that has attributes but lacks the zone field exits
-  64 and names the field. Request `outFields` that include the zone field.
+- **A feature whose `attributes` key is missing or is not an object is refused (exit 3)** with
+  "feature N has no attributes", which names no field. A feature with an empty `attributes`
+  object `{}`, or with attributes that lack the zone field, exits 64 and names the field.
+  Request `outFields` that include the zone field.
+- **Live subtype counts change when FEMA republishes the layer;** the figures here are a dated
+  snapshot, not a pinned value. A rerun of the grouped count on 2026-11-12 gave a null subtype
+  on 836044 `AE` polygons, where the 2026-11-11 count above gave 836014.
+- **A subtype that is the literal text `<Null>` is compared as an ordinary subtype string,** not
+  folded to blank. The live `AE` data carried 86 such polygons on 2026-11-12. A one-polygon check gave STABLE
+  for every pairing of `<Null>` and a null subtype, and no wrong verdict was seen.
+- **A parcel file with the wrong columns echoes its first line.** The "columns not in the CSV"
+  error prints the header it found, so a file that is not a parcel list shows its first line on
+  stderr.
+- **A JSON file nested thousands of levels deep exits 70** with a `RecursionError` traceback and
+  not a refusal. It is a tool-fault code, never a false clean.
 - **A crash prints a Python traceback to stderr.** The traceback holds local file paths and no
   credential. The exit code is 70.
 - **The output CSV is UTF-8 without a byte order mark.** Import it as UTF-8 in Excel, or a
   non-ASCII parcel id can show as garbled text.
-- **Interpreters re-run.** The 233 assertions were re-run on Windows with Python 3.13.2, 3.12
+- **Interpreters re-run.** The 235 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
   holds no credential, so there is no stub server. The self-test disables `socket.socket` while

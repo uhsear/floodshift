@@ -462,6 +462,12 @@ def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
         notes.append(note)
     old.index(use_subtype)
     new.index(use_subtype)
+    if use_subtype:
+        # a letter blank all through one vintage and filled in the other is
+        # the same missing value, so the pair counts as a gap on the blank side
+        for blank, filled in ((old, new), (new, old)):
+            blank.gaps |= (set(z for (z, s) in blank.by_key if not s)
+                           & set(z for (z, s) in filled.by_key if s))
     a, b = sr_ids(old.sr), sr_ids(new.sr)
     if a and b and not (a & b):
         raise Refused(
@@ -578,7 +584,7 @@ def judge(parcel, old, new, retrace, change, units):
     if gap:
         return Result(parcel, UNVERIFIED,
                       "the subtype is blank on this polygon of the %s "
-                      "vintage, where other polygons of zone %s have one, so "
+                      "vintage, where zone %s has one elsewhere, so "
                       "the zone cannot be matched" % gap[0])
     if a == b:
         blind = [which for which, v in (("old", old), ("new", new))
@@ -1393,6 +1399,20 @@ def _self_test(tmp):
     r = one(n, o, 1500, 500)
     check(r.cls == UNVERIFIED and "of the old vintage" in r.reason,
           "and the same when the blank polygon is in the old vintage")
+    o, n, notes = pair([feat("AE", [rect(0, 0, 1000, 1000)], "FLOODWAY"),
+                        feat("X", [rect(1000, 0, 2000, 1000)], minimal)],
+                       [feat("AE", [rect(0, 0, 1000, 1000)], "FLOODWAY"),
+                        feat("X", [rect(1000, 0, 2000, 1000)], "")])
+    r = one(o, n, 1500, 500)
+    check(r.cls == UNVERIFIED and not notes and "blank on this polygon of "
+          "the new vintage" in r.reason and one(o, n, 500, 500).cls == STABLE,
+          "a zone letter blank on every polygon of the new vintage and "
+          "filled in the old is no answer, not a false CHANGED, while "
+          "another zone stays STABLE  <-- pinned defect")
+    r = one(n, o, 1500, 500)
+    check(r.cls == UNVERIFIED and "of the old vintage" in r.reason,
+          "and the same when the vintage that is blank all through is the "
+          "old one")
     o, n, notes = pair(old_world, old_world, DEFAULT_SUBTYPE_FIELD)
     r = one(o, n, 1500, 500)
     check(r.cls == UNVERIFIED and "neither vintage has a subtype" in r.reason
