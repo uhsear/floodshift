@@ -709,8 +709,9 @@ refusal described above.
   so a one-parcel file exits 4 on 3.13. The self-test count is the same on both.
 - **Field names must match in case.** A service that returns `fld_zone` gets exit 64 naming the
   field, not a silent mismatch.
-- **Only plain Esri JSON polygon rings are accepted.** A geometry with `curveRings`, and GeoJSON,
-  are refused with exit 3 and not read.
+- **Only plain Esri JSON polygon rings are accepted.** A geometry that has `curveRings` and no
+  `rings`, and GeoJSON, are refused with exit 3 and not read. A geometry that has both `rings`
+  and `curveRings` is accepted: the tool reads `rings` and ignores `curveRings`.
 - **A vintage with any feature that has null geometry or a blank or null zone label is refused
   whole.** Clean it first.
 - **Only a JSON `true` is read as a truncated response.** A hand-edited or concatenated file
@@ -727,7 +728,10 @@ refusal described above.
   workstation with Python 3.13.2. A layer of 2,000 square zones against 20,000 parcels took about
   6 seconds (exit 5). One zone of 50,001 vertices, the nearest zone to each of 2,000 parcels whose
   zone differs, took about 64 seconds (exit 0). Neither is a county benchmark, and a county-wide
-  layer against a large parcel file will be slow.
+  layer against a large parcel file will be slow. The fixtures for these two timings are not
+  published, so a reader cannot reproduce the figures exactly. A rebuilt fixture of the same
+  shape gave a similar time for the 20,000 parcel run, and a shorter time for the 50,001 vertex
+  run. The exit code depends on the data, so a rebuilt fixture may exit with a different code.
 - **Coordinates beyond about 1e300 are not supported.** A polygon with a near-zero height, or a
   coordinate near 1e308, can stop the run with exit 64 or 70, which is never a finding. A
   coordinate of 1e308 on both sides of a polygon gave exit 64 in my test: a polygon that spans
@@ -744,7 +748,8 @@ refusal described above.
   full disk, can leave a partial file, and the exit code is 2. A second run is then refused
   because the file exists. Delete the partial file by hand.
 - **Only six leading characters are guarded.** A line feed, the full-width forms of `=`, `+`,
-  `-` and `@`, and a formula that starts after white space are not. OWASP lists the line feed
+  `-` and `@` are not. A formula that starts after white space is guarded in the id and zone
+  columns, because the reader strips that white space first. OWASP lists the line feed
   and the full-width forms as well, and warns that Excel may remove quotes or escape characters
   when a CSV is saved and re-opened. This tool writes the file and does not see that later
   save.
@@ -781,12 +786,12 @@ can exit 5 on this alone.
   parcels with `--sample 20000` did it). Read the exit code of floodshift, not of the pipe.
   The same holds for `--self-test`: its final PASS print fails on a closed pipe and the run
   ends with exit 70, so read its exit code, not the pipe's.
-- **Only comma-delimited parcel files are read.** A first line of `sep=,` or a semicolon
-  delimiter is refused with exit 64 and a "columns not in the CSV" message that shows the real
-  header.
+- **Only comma-delimited parcel files are read.** A semicolon-delimited file is refused with
+  exit 64 and a "columns not in the CSV" message that shows its header line. A first line of
+  `sep=,` or `sep=;` is refused the same way, but the message shows that `sep=` line as the
+  header, not the real header on line 2.
 - **The refusal for `curveRings` does not name curves.** It is the general message that the
-  geometry is not polygon rings of at least 3 finite points each. A geometry that carries both
-  `rings` and `curveRings` was not tested.
+  geometry is not polygon rings of at least 3 finite points each.
 - **`floodshift.py` and `LICENSE` have CRLF line endings in a Windows working tree** with
   `core.autocrlf=true`. The git index holds LF, so the published files are not affected.
 - **An id that really starts with an apostrophe and then `=`, `+`, `-`, `@`, a tab or a
@@ -804,6 +809,9 @@ can exit 5 on this alone.
   of surrounding white space and a leading formula character gets one apostrophe. Zone labels
   are upper-cased with white space collapsed. Compare ids after you read the file back, not as
   raw strings.
+- **A parcel id such as `-123` is written to `--out` as `'-123`, with a literal apostrophe.**
+  This tool strips it on read. Any other program that reads the file sees the apostrophe as part
+  of the id.
 - **The numeric `x` and `y` columns are not guarded.** A negative coordinate starts with a minus
   sign (for example `-5.0`). A CSV linter that flags every cell that starts with `-` flags
   these, but a spreadsheet reads them as numbers.
@@ -834,7 +842,8 @@ can exit 5 on this alone.
   on 836044 `AE` polygons, where the 2026-11-11 count above gave 836014.
 - **A subtype that is the literal text `<Null>` is compared as an ordinary subtype string,** not
   folded to blank. The live `AE` data carried 86 such polygons on 2026-11-12. A one-polygon check gave STABLE
-  for every pairing of `<Null>` and a null subtype, and no wrong verdict was seen.
+  for `<Null>` against `<Null>` only. `<Null>` against a null subtype, in either order, and null
+  against null are UNVERIFIED (exit 4, nothing compared), so no wrong verdict was seen.
 - **A parcel file with the wrong columns echoes its first line.** The "columns not in the CSV"
   error prints the header it found, so a file that is not a parcel list shows its first line on
   stderr.
