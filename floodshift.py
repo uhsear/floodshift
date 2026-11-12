@@ -82,7 +82,6 @@ DEFAULT_X_FIELD = "X"
 DEFAULT_Y_FIELD = "Y"
 DEFAULT_ZONE_FIELD = "FLD_ZONE"
 DEFAULT_SUBTYPE_FIELD = "ZONE_SUBTY"
-SUBTYPE_ZONE = "X"  # the one letter that is two hazards, shaded and unshaded
 
 # =============================================================================
 # End of CONFIGURATION.
@@ -440,8 +439,10 @@ def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
     A subtype is part of the key only when both vintages carry it, that is,
     when some feature of each has a non-blank value. Zone X covers both the
     shaded and the unshaded hazard areas and only the subtype tells them
-    apart. A subtype in neither vintage leaves zone X, and only X, with no
-    answer for a parcel that is X in both. A subtype present in one vintage
+    apart, and the subtype is what separates a floodway from the rest of
+    zone AE. A subtype in neither vintage leaves every zone with no answer
+    for a parcel that is in it in both, because the letter alone cannot say
+    that no parcel moved between subtypes. A subtype present in one vintage
     and not the other would make every zone differ, so it is left out of the
     key. The vintage that has it is marked, and judge() gives no answer for a
     parcel whose zone letter matches in a zone that holds a subtype there:
@@ -454,8 +455,9 @@ def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
     use_subtype = bool(subtype_field) and old.has_subtype and new.has_subtype
     if subtype_field and not use_subtype:
         note = ("NOTE      %s is missing or blank in at least one vintage, so "
-                "it is left out of the zone key and Zone X shaded and "
-                "unshaded are not told apart" % subtype_field)
+                "it is left out of the zone key and a zone's subtypes, "
+                "such as Zone X shaded and unshaded or an AE floodway, are "
+                "not told apart" % subtype_field)
         if old.has_subtype != new.has_subtype:
             (old if old.has_subtype else new).lone = subtype_field
             note += (". A parcel in the same zone of both vintages is "
@@ -463,12 +465,11 @@ def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
                      "gives the zone one")
         else:
             old.bare = new.bare = True
-            note += (". A parcel in zone %s in both vintages is UNVERIFIED, "
-                     "because only the subtype tells shaded %s from "
-                     "unshaded %s. Add %s to outFields, or pass "
-                     "--subtype-field \"\" to accept the letter alone"
-                     % (SUBTYPE_ZONE, SUBTYPE_ZONE, SUBTYPE_ZONE,
-                        subtype_field))
+            note += (". A parcel in the same zone in both vintages is "
+                     "UNVERIFIED, because only the subtype tells shaded X "
+                     "from unshaded X or an AE floodway from the rest of "
+                     "AE. Add %s to outFields, or pass --subtype-field "
+                     "\"\" to accept the letter alone" % subtype_field)
         notes.append(note)
     old.index(use_subtype)
     new.index(use_subtype)
@@ -604,12 +605,12 @@ def judge(parcel, old, new, retrace, change, units):
                           "the same zone letter in both vintages, but only "
                           "the %s vintage has a subtype, so a move between "
                           "subtypes of this zone cannot be seen" % blind[0])
-        if old.bare and a[0] == SUBTYPE_ZONE:
+        if old.bare:
             return Result(parcel, UNVERIFIED,
                           "zone %s in both vintages, but neither vintage "
-                          "has a subtype, so a move between shaded and "
-                          "unshaded %s cannot be seen"
-                          % (SUBTYPE_ZONE, SUBTYPE_ZONE))
+                          "has a subtype, so a move between its subtypes "
+                          "(shaded and unshaded X, an AE floodway) cannot "
+                          "be seen" % a[0])
         return Result(parcel, STABLE, "the same zone in both vintages", a, b)
     shift = max(old.distance_to(b, parcel.x, parcel.y),
                 new.distance_to(a, parcel.x, parcel.y))
@@ -656,7 +657,22 @@ def describe(report, sample=DEFAULT_SAMPLE, overlap_hint=""):
     lines.append("retrace distance %.1f %s, change distance %.1f %s"
                  % (report.retrace, report.units, report.change,
                     report.units))
+    unverified = [r for r in report.results if r.cls == UNVERIFIED]
+
+    def no_answer_section():
+        if not unverified:
+            return
+        lines.append("")
+        lines.append("parcels with no answer:")
+        for r in unverified[:sample]:
+            lines.append("  %s  %s, line %s"
+                         % (r.parcel.parcel_id or "(no id)", r.reason,
+                            r.parcel.line))
+        if len(unverified) > sample:
+            lines.append("  ... and %d more" % (len(unverified) - sample))
+
     if report.compared == 0:
+        no_answer_section()
         lines.append("")
         lines.append("VERDICT: NOTHING COMPARED. No parcel could be compared "
                      "in both vintages, so the geometry checked nothing. "
@@ -689,16 +705,7 @@ def describe(report, sample=DEFAULT_SAMPLE, overlap_hint=""):
             REVIEW)
     section("zone differences within the retrace distance, counted as a moved "
             "line:", RETRACED)
-    unverified = [r for r in report.results if r.cls == UNVERIFIED]
-    if unverified:
-        lines.append("")
-        lines.append("parcels with no answer:")
-        for r in unverified[:sample]:
-            lines.append("  %s  %s, line %s"
-                         % (r.parcel.parcel_id or "(no id)", r.reason,
-                            r.parcel.line))
-        if len(unverified) > sample:
-            lines.append("  ... and %d more" % (len(unverified) - sample))
+    no_answer_section()
     lines.append("")
     if report.count(REVIEW):
         verdict = ("VERDICT: %d parcel(s) in the review band. Decide them "
@@ -1466,13 +1473,17 @@ def _self_test(tmp):
     o, n, notes = pair(old_world, old_world, DEFAULT_SUBTYPE_FIELD)
     r = one(o, n, 1500, 500)
     check(r.cls == UNVERIFIED and "neither vintage has a subtype" in r.reason
-          and len(notes) == 1 and "zone X in both vintages is UNVERIFIED"
-          in notes[0] and "--subtype-field" in notes[0],
+          and len(notes) == 1 and "the same zone in both vintages is "
+          "UNVERIFIED" in notes[0] and "--subtype-field" in notes[0],
           "a subtype in neither vintage leaves a parcel that is X in both "
           "with no answer, as shaded and unshaded X look alike, and the "
           "note says how to fix it  <-- pinned defect")
-    check(one(o, n, 500, 500).cls == STABLE,
-          "and a zone other than X is still STABLE")
+    r = one(o, n, 500, 500)
+    check(r.cls == UNVERIFIED and "zone AE in both vintages" in r.reason
+          and "AE floodway" in r.reason and "AE floodway" in notes[0],
+          "and a parcel that is AE in both is no answer either, as a floodway "
+          "inside AE looks like the rest of AE without a subtype and the "
+          "note names it  <-- pinned defect")
     o, n, notes = pair(old_world, old_world, "")
     check(one(o, n, 1500, 500).cls == STABLE and notes == [],
           "with the subtype turned off the same X parcel is STABLE, said "
@@ -1857,11 +1868,24 @@ def _self_test(tmp):
           "the layers carry no subtype, and the run says the key is the zone "
           "letter alone")
     x_csv = tmpfile("xparcel.csv", "PARCEL_ID,X,Y\nXS-1,1500,500\nS-1,500,500\n")
-    code, out, err = run_cli([old_json, new_json, x_csv])
+    x_csv3 = tmpfile("xparcel3.csv", "PARCEL_ID,X,Y\nXS-1,1500,500\n"
+                     "S-1,500,500\nR-1,1010,500\n")
+    code, out, err = run_cli([old_json, new_json, x_csv3])
     check(code == 5 and "XS-1  zone X in both vintages, but neither vintage "
-          "has a subtype" in out and "1 of 2 parcel(s) have no answer" in out,
+          "has a subtype" in out and "S-1  zone AE in both vintages, but "
+          "neither vintage has a subtype" in out
+          and "2 of 3 parcel(s) have no answer" in out,
           "the whole CLI on layers with no subtype exits 5 for a parcel that "
-          "is X in both, not a clean 0  <-- pinned defect")
+          "is X in both and for one that is AE in both, not a clean 0  "
+          "<-- pinned defect")
+    code, out, err = run_cli([old_json, new_json, x_csv])
+    check(code == 4 and "NOTHING COMPARED" in out
+          and "UNVERIFIED 2" in out and "parcels with no answer:" in out
+          and "XS-1  zone X in both vintages" in out
+          and "S-1  zone AE in both vintages" in out,
+          "and when every parcel is the same zone in both, the run is "
+          "NOTHING COMPARED, exit 4, not a clean 0, and it lists the parcels "
+          "with no answer and why  <-- pinned defect")
     code, out, err = run_cli([old_json, new_json, x_csv, "--subtype-field",
                               ""])
     check(code == 0 and "VERDICT: 0 parcel(s) changed zone" in out
@@ -1874,10 +1898,10 @@ def _self_test(tmp):
     code, out, err = run_cli(base + ["--change-distance", "60",
                                      "--units", "m"])
     check(code == 5 and "VERDICT: 2 parcel(s) changed zone" in out
-          and "70.0 m" in out and out.rstrip().endswith("2 of 6 parcel(s) "
+          and "70.0 m" in out and out.rstrip().endswith("3 of 6 parcel(s) "
           "have no answer and are in none of these counts."),
           "a change distance of 60 makes the 70 unit parcel CHANGED, and "
-          "--units relabels without converting; the two parcels with no "
+          "--units relabels without converting; the three parcels with no "
           "answer make it exit 5")
     code, out, err = run_cli(base + ["--retrace-distance", "5",
                                      "--change-distance", "5"])

@@ -61,6 +61,7 @@ PASS  a blank polygon of a zone that has a subtype elsewhere in the only vintage
 PASS  a zone letter blank on every polygon of the new vintage and filled in the old is no answer, not a false CHANGED, while another zone stays STABLE  <-- pinned defect
 ...
 PASS  a subtype in neither vintage leaves a parcel that is X in both with no answer, as shaded and unshaded X look alike, and the note says how to fix it  <-- pinned defect
+PASS  and a parcel that is AE in both is no answer either, as a floodway inside AE looks like the rest of AE without a subtype and the note names it  <-- pinned defect
 ...
 PASS  exceededTransferLimit true is refused, the server cut the answer short  <-- pinned defect
 ...
@@ -87,10 +88,10 @@ PASS  an unexpected exception exits 70, not the 1 that means review  <-- pinned 
 PASS  the footer reports failures by count and by name, and exits 1  <-- pinned defect
 ...
 --------------------------------------------------------------------
-241 assertions, 0 failed
+242 assertions, 0 failed
 ```
 
-The full run prints all 241 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
+The full run prints all 242 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
 
 ## What already exists
 
@@ -124,12 +125,12 @@ descriptive queries returned nothing again. That shows only that the search foun
 Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no network, no
 database.
 
-The self-test prints the same 241 assertions on Windows with Python 3.13.2, Python 3.12 and
+The self-test prints the same 242 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
 ends it with LF. Python documents this: a text stream with `newline=None` translates `\n` on
 output to `os.linesep`
-([io.TextIOWrapper](https://docs.python.org/3/library/io.html#io.TextIOWrapper)). `coverage run --branch floodshift.py --self-test` reports 100 percent of 1094
+([io.TextIOWrapper](https://docs.python.org/3/library/io.html#io.TextIOWrapper)). `coverage run --branch floodshift.py --self-test` reports 100 percent of 1101
 statements and 234 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
@@ -245,7 +246,7 @@ Every parcel lands in exactly one class, and the counts add up to the parcels re
 | `RETRACED` | The zones differ, and the shift is at most `--retrace-distance`. | The line moved. Not a zone change. |
 | `REVIEW` | The shift is between the two distances. | The geometry has no opinion. |
 | `CHANGED` | The shift is above `--change-distance`, or a zone has no counterpart. | A real change. |
-| `UNVERIFIED` | No coordinate, or not inside exactly one zone of each vintage, or the subtype is in one vintage only or in neither and the parcel is in zone X (below). | No answer, and no guess. |
+| `UNVERIFIED` | No coordinate, or not inside exactly one zone of each vintage, or the subtype is in one vintage only, or in neither, and the letter alone cannot show a move between subtypes (below). | No answer, and no guess. |
 
 The shift of a parcel whose zone differs is the larger of two distances: from the parcel to the
 nearest polygon of its new zone in the old vintage, and from the parcel to the nearest polygon
@@ -273,9 +274,10 @@ did not become an unshaded one. A parcel in a zone letter that has no subtype an
 vintage is STABLE, unless the other vintage fills the subtype for that letter: a blank is then a
 missing value and the parcel is UNVERIFIED. When neither vintage
 carries a subtype, for example because the query left it out of `outFields`, the subtype is
-also left out of the key, and a parcel that is zone X in both vintages is UNVERIFIED, for the
-same reason. Other zones are compared by letter, and the note says so. Pass
-`--subtype-field ""` to accept the letter alone for every zone, X included.
+also left out of the key, and a parcel in the same zone in both vintages is UNVERIFIED, for the
+same reason, whichever zone it is: only the subtype tells shaded X from unshaded X, or a floodway
+inside `AE` from the rest of `AE`. A parcel whose zone differs is still judged by its distances.
+Pass `--subtype-field ""` to accept the letter alone for every zone.
 
 A point exactly on a line that two zones share, or inside two overlapping polygons of different
 zones, is in more than one zone. It is UNVERIFIED. Neither zone may claim it. "Exactly on" is
@@ -326,13 +328,13 @@ east of the old line. `C-1` and `V-1` are in the AH area that became X.
 ```
 $ python floodshift.py old.json new.json parcels.csv
 floodshift: old.json 3 zone(s), new.json 4 zone(s), parcels.csv 6 parcel(s)
-NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in zone X in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
-parcels read: 6, compared in both vintages: 4
-  STABLE     1
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and a zone's subtypes, such as Zone X shaded and unshaded or an AE floodway, are not told apart. A parcel in the same zone in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X or an AE floodway from the rest of AE. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
+parcels read: 6, compared in both vintages: 3
+  STABLE     0
   RETRACED   1
   REVIEW     1
   CHANGED    1
-  UNVERIFIED 2
+  UNVERIFIED 3
 retrace distance 30.0 ft, change distance 100.0 ft
 
 a plain overlay reports 3 parcel(s) changed zone
@@ -347,10 +349,11 @@ zone differences within the retrace distance, counted as a moved line:
   R-1  X to AE, 10.0 ft, line 2
 
 parcels with no answer:
+  S-1  zone AE in both vintages, but neither vintage has a subtype, so a move between its subtypes (shaded and unshaded X, an AE floodway) cannot be seen, line 5
   U-1  in no zone of the old vintage; in no zone of the new vintage, line 6
   U-2  no usable coordinate, line 7
 
-VERDICT: 1 parcel(s) in the review band. Decide them before a change count is published. 2 of 6 parcel(s) have no answer and are in none of these counts.
+VERDICT: 1 parcel(s) in the review band. Decide them before a change count is published. 3 of 6 parcel(s) have no answer and are in none of these counts.
 [exit 1]
 ```
 
@@ -358,20 +361,23 @@ VERDICT: 1 parcel(s) in the review band. Decide them before a change count is pu
 zone `X` is 5 feet away in the new vintage and the new zone `AE` is 10 feet away in the old
 one. `C-1` was in `AH`, and the nearest old `X` is 500 feet away, so it is a real change.
 `V-1` is in between, at 70 feet. The geometry has no opinion about it, so the exit is 1.
+`S-1` is in `AE` in both vintages. The demo layers carry no `ZONE_SUBTY` field, so the tool cannot
+tell an ordinary `AE` parcel from one inside a floodway, and it gives no answer (see "A subtype in
+neither vintage").
 
-The two distances are yours to set. Name a change distance of 60 and `V-1` is decided. The two
+The two distances are yours to set. Name a change distance of 60 and `V-1` is decided. The three
 parcels with no answer still keep the run from a clean exit, so the code is 5, not 0:
 
 ```
 $ python floodshift.py old.json new.json parcels.csv --change-distance 60
 floodshift: old.json 3 zone(s), new.json 4 zone(s), parcels.csv 6 parcel(s)
-NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in zone X in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
-parcels read: 6, compared in both vintages: 4
-  STABLE     1
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and a zone's subtypes, such as Zone X shaded and unshaded or an AE floodway, are not told apart. A parcel in the same zone in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X or an AE floodway from the rest of AE. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
+parcels read: 6, compared in both vintages: 3
+  STABLE     0
   RETRACED   1
   REVIEW     0
   CHANGED    2
-  UNVERIFIED 2
+  UNVERIFIED 3
 retrace distance 30.0 ft, change distance 60.0 ft
 
 a plain overlay reports 3 parcel(s) changed zone
@@ -384,10 +390,11 @@ zone differences within the retrace distance, counted as a moved line:
   R-1  X to AE, 10.0 ft, line 2
 
 parcels with no answer:
+  S-1  zone AE in both vintages, but neither vintage has a subtype, so a move between its subtypes (shaded and unshaded X, an AE floodway) cannot be seen, line 5
   U-1  in no zone of the old vintage; in no zone of the new vintage, line 6
   U-2  no usable coordinate, line 7
 
-VERDICT: 2 parcel(s) changed zone. 1 of the 3 zone difference(s) are within the retrace distance and are counted as a moved line, not as a zone change. 2 of 6 parcel(s) have no answer and are in none of these counts.
+VERDICT: 2 parcel(s) changed zone. 1 of the 3 zone difference(s) are within the retrace distance and are counted as a moved line, not as a zone change. 3 of 6 parcel(s) have no answer and are in none of these counts.
 [exit 5]
 ```
 
@@ -399,14 +406,14 @@ A dry run names the file and says it was not written. `--apply` writes one row p
 $ python floodshift.py old.json new.json parcels.csv --out zones.csv
 ...
 
-VERDICT: 1 parcel(s) in the review band. Decide them before a change count is published. 2 of 6 parcel(s) have no answer and are in none of these counts.
+VERDICT: 1 parcel(s) in the review band. Decide them before a change count is published. 3 of 6 parcel(s) have no answer and are in none of these counts.
 
 Check only. zones.csv was not written. Re-run with --apply.
 [exit 1]
 
 $ python floodshift.py old.json new.json parcels.csv --out zones.csv --apply
 ...
-VERDICT: 1 parcel(s) in the review band. Decide them before a change count is published. 2 of 6 parcel(s) have no answer and are in none of these counts.
+VERDICT: 1 parcel(s) in the review band. Decide them before a change count is published. 3 of 6 parcel(s) have no answer and are in none of these counts.
 
 wrote zones.csv
 [exit 1]
@@ -416,7 +423,7 @@ parcel_id,line,x,y,old_zone,new_zone,class,shift,reason
 R-1,2,1010.0,500.0,X,AE,RETRACED,10.000,"the line would have to move at most 30.0 ft: counted as a moved line, not a zone change"
 C-1,3,1500.0,1500.0,AH,X,CHANGED,500.000,"the line would have to move 500.0 ft, more than 100.0 ft: a real change"
 V-1,4,1500.0,1070.0,AH,X,REVIEW,70.000,"the line would have to move 70.0 ft, between 30.0 and 100.0 ft: neither a re-trace nor a change"
-S-1,5,500.0,500.0,AE,AE,STABLE,,the same zone in both vintages
+S-1,5,500.0,500.0,,,UNVERIFIED,,"zone AE in both vintages, but neither vintage has a subtype, so a move between its subtypes (shaded and unshaded X, an AE floodway) cannot be seen"
 U-1,6,9000.0,9000.0,,,UNVERIFIED,,in no zone of the old vintage; in no zone of the new vintage
 U-2,7,,,,,UNVERIFIED,,no usable coordinate
 
@@ -435,8 +442,11 @@ floodshift.py: error: unrecognized arguments: --ap
 
 A spreadsheet reads a cell as a formula when its text starts with `=`, `+`, `-`, `@`, a tab or
 a carriage return
-([OWASP, CSV Injection](https://community.owasp.org/attacks/CSV_Injection) lists these
-characters and the single-quote prefix as the defence). Every text column of `--out` is written
+([OWASP, CSV Injection](https://owasp.org/www-community/attacks/CSV_Injection) lists these
+characters and names the single-quote prefix as one sanitization step). The same page says that
+these techniques are "not reliable in Microsoft Excel after saving and re-opening the CSV
+file", and for Excel it recommends a tab character inside the quoted field. This tool writes
+the apostrophe, so it is not a full defence in Excel after a re-save. Every text column of `--out` is written
 with one leading apostrophe when it starts with one of the six: `parcel_id`, `old_zone`,
 `new_zone` and `reason`. The numeric columns (`line`, `x`, `y`, `shift`) are not touched, so a
 negative coordinate keeps its sign, and `class` is one of five fixed words. The self-test
@@ -467,12 +477,13 @@ and braces.
 Zone X is two hazards, and the subtype tells them apart. Here the older file has the
 `ZONE_SUBTY` field on every feature but blank, and the newer file fills it in. The shapes are
 identical. A tool that compared the subtype as a key would call every X parcel a change. This
-tool does not, and it does not call the X parcel stable either:
+tool does not, and it does not call the X parcel stable either. The `AE` parcel, whose polygon
+is blank in both files, is STABLE:
 
 ```
 $ python floodshift.py sub_old.json sub_new.json sub.csv
 floodshift: sub_old.json 2 zone(s), sub_new.json 2 zone(s), sub.csv 2 parcel(s)
-NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in the same zone of both vintages is UNVERIFIED where the vintage that has the subtype gives the zone one
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and a zone's subtypes, such as Zone X shaded and unshaded or an AE floodway, are not told apart. A parcel in the same zone of both vintages is UNVERIFIED where the vintage that has the subtype gives the zone one
 parcels read: 2, compared in both vintages: 1
   STABLE     1
   RETRACED   0
@@ -521,8 +532,9 @@ with the subtype, or pass `--subtype-field ""` to say the letter is enough.
 ## A subtype in neither vintage
 
 A query that leaves `ZONE_SUBTY` out of `outFields` gives two files with no subtype at all.
-The letter X is then all the tool has, and shaded X and unshaded X look alike. The tool does not
-call the X parcel stable. Save this as `make_none.py` and run it to get the three files:
+The zone letter is then all the tool has. Shaded X and unshaded X look alike, and so do a floodway
+inside `AE` and the rest of `AE`. The tool does not call a parcel stable when it is in the same
+zone in both vintages. Save this as `make_none.py` and run it to get the three files:
 
 ```python
 import json
@@ -548,27 +560,30 @@ open("none.csv", "w").write("PARCEL_ID,X,Y\nA-1,500,500\nX-1,1500,500\n")
 ```
 $ python floodshift.py none_old.json none_new.json none.csv
 floodshift: none_old.json 2 zone(s), none_new.json 2 zone(s), none.csv 2 parcel(s)
-NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in zone X in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
-parcels read: 2, compared in both vintages: 1
-  STABLE     1
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and a zone's subtypes, such as Zone X shaded and unshaded or an AE floodway, are not told apart. A parcel in the same zone in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X or an AE floodway from the rest of AE. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
+parcels read: 2, compared in both vintages: 0
+  STABLE     0
   RETRACED   0
   REVIEW     0
   CHANGED    0
-  UNVERIFIED 1
+  UNVERIFIED 2
 retrace distance 30.0 ft, change distance 100.0 ft
 
-a plain overlay reports 0 parcel(s) changed zone
-
 parcels with no answer:
-  X-1  zone X in both vintages, but neither vintage has a subtype, so a move between shaded and unshaded X cannot be seen, line 3
+  A-1  zone AE in both vintages, but neither vintage has a subtype, so a move between its subtypes (shaded and unshaded X, an AE floodway) cannot be seen, line 2
+  X-1  zone X in both vintages, but neither vintage has a subtype, so a move between its subtypes (shaded and unshaded X, an AE floodway) cannot be seen, line 3
 
-VERDICT: 0 parcel(s) changed zone. No compared parcel has a different zone in the two vintages. 1 of 2 parcel(s) have no answer and are in none of these counts.
-[exit 5]
+VERDICT: NOTHING COMPARED. No parcel could be compared in both vintages, so the geometry checked nothing. This is not a clean run.
+[exit 4]
 ```
 
-With `--subtype-field ""` the same files give exit 0 and no parcel without an answer. Only zone X
-is held back. Another zone that has subtypes, such as an `AE` floodway, cannot be found
-without the field, so the note tells you to ask for it.
+Both parcels have no answer, so no parcel was compared and the exit is 4. The verdict wording
+is "the geometry checked nothing", which is not quite what happened. The two parcels were
+located, and the lines under "parcels with no answer" give the real reason.
+
+With `--subtype-field ""` the same files give exit 0 and no parcel without an answer. Every zone
+is then compared by its letter alone. That is what the flag means, and nothing in the run says a
+floodway was looked for.
 
 ## Refusals
 
@@ -620,7 +635,7 @@ are in a different coordinate system. This is exit 4. It is never a clean run.
 ```
 $ python floodshift.py old.json new.json far.csv
 floodshift: old.json 3 zone(s), new.json 4 zone(s), far.csv 1 parcel(s)
-NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and Zone X shaded and unshaded are not told apart. A parcel in zone X in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
+NOTE      ZONE_SUBTY is missing or blank in at least one vintage, so it is left out of the zone key and a zone's subtypes, such as Zone X shaded and unshaded or an AE floodway, are not told apart. A parcel in the same zone in both vintages is UNVERIFIED, because only the subtype tells shaded X from unshaded X or an AE floodway from the rest of AE. Add ZONE_SUBTY to outFields, or pass --subtype-field "" to accept the letter alone
 parcels read: 1, compared in both vintages: 0
   STABLE     0
   RETRACED   0
@@ -629,14 +644,17 @@ parcels read: 1, compared in both vintages: 0
   UNVERIFIED 1
 retrace distance 30.0 ft, change distance 100.0 ft
 
+parcels with no answer:
+  F-1  in no zone of the old vintage; in no zone of the new vintage, line 2
+
 VERDICT: NOTHING COMPARED. No parcel could be compared in both vintages, so the geometry checked nothing. This is not a clean run. Check that the parcels are in the same coordinate system as the zones.
 [exit 4]
 ```
 
 ## The live service
 
-I did not keep a run on real FEMA polygons, so this README makes no claim about run time or
-about how many parcels such a run changes. The one check that was repeated is the service
+I did not keep a run on real FEMA polygons, so this README makes no claim about run time on real
+FEMA polygons or about how many parcels such a run changes. The one check that was repeated is the service
 itself. On 2026-10-29 layer 28 reported a maximum record count of 2000 and wkid 4269, and a
 query with `resultRecordCount=5` returned `exceededTransferLimit: true`. That matches the
 refusal described above.
@@ -705,8 +723,11 @@ refusal described above.
   and a wkid on the other are refused for the same reason.
 - **Pure Python.** Edges are filed in horizontal bands, so a point meets only the edges level
   with it. Finding the zones that hold a parcel scans the bounding box of every zone, so the
-  work grows with parcels times zones. Run time was not measured at county scale. A
-  county-wide layer against a large parcel file will be slow.
+  work grows with parcels times zones. I timed two synthetic runs on the Windows
+  workstation with Python 3.13.2. A layer of 2,000 square zones against 20,000 parcels took about
+  6 seconds (exit 5). One zone of 50,001 vertices, the nearest zone to each of 2,000 parcels whose
+  zone differs, took about 64 seconds (exit 0). Neither is a county benchmark, and a county-wide
+  layer against a large parcel file will be slow.
 - **Coordinates beyond about 1e300 are not supported.** A polygon with a near-zero height, or a
   coordinate near 1e308, can stop the run with exit 64 or 70, which is never a finding. A
   coordinate of 1e308 on both sides of a polygon gave exit 64 in my test: a polygon that spans
@@ -727,9 +748,12 @@ refusal described above.
   and the full-width forms as well, and warns that Excel may remove quotes or escape characters
   when a CSV is saved and re-opened. This tool writes the file and does not see that later
   save.
-- **A subtype missing from both vintages holds back only zone X.** The run exits 5 when a
-  parcel is X in both vintages. A parcel in another zone that has subtypes, such as an `AE`
-  floodway, is compared by letter. On 2026-11-11 a grouped count on layer 28 (`groupByFieldsForStatistics=ZONE_SUBTY`
+- **A subtype missing from both vintages holds back every zone that a parcel is in twice.** A
+  parcel in the same zone in both vintages is UNVERIFIED, whatever the zone, and the run exits 5,
+  or 4 when no parcel has an answer. An earlier build held back only zone X, so a parcel that
+  moved into an `AE` floodway read STABLE with exit 0 when the query had left `ZONE_SUBTY` out.
+  The flag `--subtype-field ""` turns the hold-back off and compares every zone by its letter,
+  and a layer that really has no subtype, such as a non-FEMA one, needs it. On 2026-11-11 a grouped count on layer 28 (`groupByFieldsForStatistics=ZONE_SUBTY`
 with `where=FLD_ZONE='AE'`) returned `FLOODWAY` 49916, `COASTAL FLOODPLAIN` 12195,
 `ADMINISTRATIVE FLOODWAY` 1762, and a null subtype on 836014 polygons. The same query for zone
 `A` returned a null subtype on 418246 polygons and non-blank subtypes on others, such as
@@ -819,8 +843,8 @@ can exit 5 on this alone.
 - **A crash prints a Python traceback to stderr.** The traceback holds local file paths and no
   credential. The exit code is 70.
 - **A parcel with a located coordinate can still count as not compared.** When every parcel is
-  inside a zone of both vintages but all of them are UNVERIFIED, for example zone X in both
-  vintages with no subtype anywhere, the verdict reads `NOTHING COMPARED` and says the geometry
+  inside a zone of both vintages but all of them are UNVERIFIED, for example the same zone in
+  both vintages with no subtype anywhere, the verdict reads `NOTHING COMPARED` and says the geometry
   checked nothing, which is not what happened. The exit code is 4, so the run is never clean,
   and the per-parcel lines give the real reason.
 - **A byte order mark inside an id is not stripped and not guarded.** A U+FEFF character before
@@ -828,7 +852,14 @@ can exit 5 on this alone.
   look of the id only. A byte order mark at the start of the parcel file is removed by the reader.
 - **The output CSV is UTF-8 without a byte order mark.** Import it as UTF-8 in Excel, or a
   non-ASCII parcel id can show as garbled text.
-- **Interpreters re-run.** The 241 assertions were re-run on Windows with Python 3.13.2, 3.12
+- **Each of the six lead characters is pinned by one assertion that covers all four text
+  columns.** A failure label does not say which column broke. Each column is checked for each
+  character, but there is not one assertion per field.
+- **A parcel CSV saved as UTF-16 exits 64 and does not name the encoding.** The message is
+  "columns not in the CSV" and shows the header as garbled text. Save the parcel file as UTF-8.
+- **An interrupted run is not mapped to a tool exit code.** Ctrl+C prints a Python traceback and
+  ends with the interpreter's own status (130 in my Windows test), not 70.
+- **Interpreters re-run.** The 242 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
   holds no credential, so there is no stub server. The self-test disables `socket.socket` while
