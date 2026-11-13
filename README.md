@@ -142,8 +142,8 @@ Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
 ends it with LF. Python documents this: a text stream with `newline=None` translates `\n` on
 output to `os.linesep`
-([io.TextIOWrapper](https://docs.python.org/3/library/io.html#io.TextIOWrapper)). `coverage run --branch floodshift.py --self-test` reports 100 percent of 1105
-statements and 234 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
+([io.TextIOWrapper](https://docs.python.org/3/library/io.html#io.TextIOWrapper)). `coverage run --branch floodshift.py --self-test` reports 100 percent of 1114
+statements and 236 branches (coverage.py 7.16.1, Windows, Python 3.13). The Linux host has no
 coverage module, so coverage was measured on Windows only.
 
 ```
@@ -595,8 +595,10 @@ located, and the lines under "parcels with no answer" give the real reason.
 
 With `--subtype-field ""` the same files give exit 0 and no parcel without an answer. Every zone
 is then compared by its letter alone. That is what the flag means, and the run prints one NOTE
-that the subtype is turned off, so a clean 0 is never silent about it. The note is the only
-change in the output: the verdict is still exit 0 and "0 parcel(s) changed zone".
+that the subtype is turned off, so a clean 0 is never silent about it. The output changes in
+four ways: that note replaces the `ZONE_SUBTY` note, "compared in both vintages" is 2, STABLE is
+2 and UNVERIFIED is 0, the "parcels with no answer" section is gone, and the verdict is "0
+parcel(s) changed zone" with exit 0 where the default run was "NOTHING COMPARED" with exit 4.
 
 ## Refusals
 
@@ -682,6 +684,9 @@ refusal described above.
 - **Only the zone label and the subtype are compared.** A zone `AE` with a new base flood
   elevation is STABLE. A floodway that moved inside an `AE` area is a change only if the
   subtype says so.
+- **A subtype spelled differently in the two vintages reads as a different zone.** The tool
+  compares subtype text, so zone X with subtype `X` in one vintage and `X (WORDING CHANGED)` in
+  the other is CHANGED, with the reason "no such zone in the other vintage" (exit 0).
 - **A relabel is a change.** FEMA's page names the moderate hazard areas "Zone B or Zone X
   (shaded)" and the minimal hazard areas "Zone C or Zone X (unshaded)". A layer that uses B in
   one vintage and X in the other shows every such parcel as CHANGED. Recode one vintage first.
@@ -894,8 +899,6 @@ can exit 5 on this alone.
   says the geometry cannot show a change. A rebuilt 2,000 zone by 20,000 parcel fixture took
   7.3 seconds and exited 1, so the timing above and the exit code are for the fixture it came
   from.
-- **One assertion per lead character covers the id, both zone labels and the reason together.**
-  A failure label does not say which column broke. Four checks per lead would say so.
 - **Interpreters re-run.** The 247 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
