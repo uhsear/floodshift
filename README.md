@@ -49,13 +49,17 @@ PASS  ' ae ' and 'AE' are one zone, a stray space is no flood change  <-- pinned
 ...
 PASS  unshaded X becoming shaded X is CHANGED, the zone letter alone would call it STABLE  <-- pinned defect
 ...
+PASS  with the subtype turned off the same parcel is STABLE, and the run says the subtype is ignored  <-- pinned defect
+...
 PASS  a point exactly on the line two zones share is UNVERIFIED, neither zone may claim it  <-- pinned defect
+...
 PASS  a point exactly on a slanted line two zones share is UNVERIFIED although the float cross product is not zero  <-- pinned defect
 ...
 PASS  a subtype in one vintage only does not make the same zone two zones, and the zone letter alone is no answer  <-- pinned defect
 ...
 PASS  a subtype field that is blank on every feature of the older vintage is no subtype, so a filled newer one is no false CHANGED  <-- pinned defect
 PASS  one polygon with a blank subtype in a vintage that carries it elsewhere for that zone is no answer, not a false CHANGED, while a zone that has no subtype anywhere stays STABLE  <-- pinned defect
+...
 PASS  a blank polygon of a zone that has a subtype elsewhere in the only vintage that carries one is no answer, as the filled polygon is, and a zone with no subtype there stays STABLE  <-- pinned defect
 ...
 PASS  a zone letter blank on every polygon of the new vintage and filled in the old is no answer, not a false CHANGED, while another zone stays STABLE  <-- pinned defect
@@ -75,12 +79,17 @@ PASS  a point on a horizontal line two zones share is UNVERIFIED, and one on the
 ...
 PASS  a tab at the start of the id, both zones and the reason gets an apostrophe and the number columns do not  <-- pinned defect
 ...
+PASS  and prints that note even when the answer is a clean 0  <-- pinned defect
+PASS  --subtype-field with an empty value turns the subtype off, and the run prints one NOTE that it did  <-- pinned defect
+...
 PASS  --out without --apply writes nothing  <-- pinned defect
 ...
 PASS  the --out file fed back to the tool gives the same ids, classes, zones and coordinates, and the report names the id without the apostrophe  <-- pinned defect
 PASS  a prefix of a flag, --ap, is refused and not read as the full flag  <-- pinned defect
 ...
 PASS  parcels nowhere near the zones are exit 4 with a hint  <-- pinned defect
+...
+PASS  the same parcel in metres is outside every foot zone and exits 4, not a clean 0  <-- pinned defect
 ...
 PASS  a subtype blank in the older file and filled in the newer is exit 5 with the X parcel UNVERIFIED, not a CHANGED one  <-- pinned defect
 ...
@@ -91,10 +100,10 @@ PASS  an unexpected exception exits 70, not the 1 that means review  <-- pinned 
 PASS  the footer reports failures by count and by name, and exits 1  <-- pinned defect
 ...
 --------------------------------------------------------------------
-244 assertions, 0 failed
+247 assertions, 0 failed
 ```
 
-The full run prints all 244 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
+The full run prints all 247 assertions. Each `...` line above is where this block is cut. The lines kept are in the order the full run prints them.
 
 ## What already exists
 
@@ -128,7 +137,7 @@ descriptive queries returned nothing again. That shows only that the search foun
 Python 3.9 or newer and nothing else. No `arcpy`, no third-party package, no network, no
 database.
 
-The self-test prints the same 244 assertions on Windows with Python 3.13.2, Python 3.12 and
+The self-test prints the same 247 assertions on Windows with Python 3.13.2, Python 3.12 and
 Python 3.9.25, and on Ubuntu with Python 3.12.3. The outputs are identical apart from line
 endings: Windows ends each line with CRLF when the output is redirected to a file, and Ubuntu
 ends it with LF. Python documents this: a text stream with `newline=None` translates `\n` on
@@ -208,7 +217,7 @@ python floodshift.py old.json new.json parcels.csv --out zones.csv --apply
 | `--x-field` | `X` | The X column. |
 | `--y-field` | `Y` | The Y column. |
 | `--zone-field` | `FLD_ZONE` | The zone attribute in both vintages. The name is case sensitive. |
-| `--subtype-field` | `ZONE_SUBTY` | The subtype attribute. An empty string turns it off. |
+| `--subtype-field` | `ZONE_SUBTY` | The subtype attribute. An empty string turns it off, and the run prints a NOTE that it is off. |
 | `--retrace-distance` | `30` | At or under this shift a zone difference is RETRACED. |
 | `--change-distance` | `100` | Above this shift a zone difference is CHANGED. |
 | `--units` | `ft` | Label printed after every distance. Nothing is converted. |
@@ -246,7 +255,7 @@ Every parcel lands in exactly one class, and the counts add up to the parcels re
 | Class | When | What it means |
 |---|---|---|
 | `STABLE` | The same zone in both vintages. | Nothing to explain. |
-| `RETRACED` | The zones differ, and the shift is at most `--retrace-distance`. | The line moved. Not a zone change. |
+| `RETRACED` | The zones differ, and the shift is at most `--retrace-distance`. | The geometry shows no change: the old zone is still that close. Counted as a moved line, not as a zone change. |
 | `REVIEW` | The shift is between the two distances. | The geometry has no opinion. |
 | `CHANGED` | The shift is above `--change-distance`, or a zone has no counterpart. | A real change. |
 | `UNVERIFIED` | No coordinate, or not inside exactly one zone of each vintage, or the subtype is in one vintage only, or in neither, and the letter alone cannot show a move between subtypes (below). | No answer, and no guess. |
@@ -585,8 +594,9 @@ is "the geometry checked nothing", which is not quite what happened. The two par
 located, and the lines under "parcels with no answer" give the real reason.
 
 With `--subtype-field ""` the same files give exit 0 and no parcel without an answer. Every zone
-is then compared by its letter alone. That is what the flag means, and nothing in the run says a
-floodway was looked for.
+is then compared by its letter alone. That is what the flag means, and the run prints one NOTE
+that the subtype is turned off, so a clean 0 is never silent about it. The note is the only
+change in the output: the verdict is still exit 0 and "0 parcel(s) changed zone".
 
 ## Refusals
 
@@ -687,7 +697,10 @@ refusal described above.
 - **All three inputs must share one projected CRS, and the tool cannot check the parcels.** A
   parcel file has no spatial reference. A parcel list in metres against zones in feet is not
   refused. It lands in the wrong place and is STABLE, UNVERIFIED or exit 4, and a true change
-  can read as none. Check the parcels' CRS yourself.
+  can read as none. At state plane scale (coordinates in the hundreds of thousands) a metre
+  list lands outside every foot zone and exits 4, which the self-test pins. Near the origin of
+  a small local grid, a metre list can land inside a zone and read STABLE with exit 0. Check the
+  parcels' CRS yourself.
 - **Exit 0 means every parcel was decided, not that no zone changed.** A CI job cannot gate on
   confirmed changes with the exit code. Read the CHANGED count or `--out`.
 - **Rows with no id and no coordinates count as parcels with no answer.** A spreadsheet export can end with a
@@ -871,7 +884,19 @@ can exit 5 on this alone.
   "columns not in the CSV" and shows the header as garbled text. Save the parcel file as UTF-8.
 - **An interrupted run is not mapped to a tool exit code.** Ctrl+C prints a Python traceback and
   ends with the interpreter's own status (130 in my Windows test), not 70.
-- **Interpreters re-run.** The 244 assertions were re-run on Windows with Python 3.13.2, 3.12
+- **The live FEMA counts drift.** The subtype counts quoted above are dated 2026-11-11. A
+  re-query on 2026-11-13 returned slightly different numbers, for example 12279 for
+  `COASTAL FLOODPLAIN` in zone `AE`, so a reader's counts will not match exactly.
+- **The FEMA glossary wording was not re-checked.** `fema.gov` returned HTTP 403 to the host
+  that wrote this README, so the quoted labels "Zone B or Zone X (shaded)" and "Zone C or Zone X
+  (unshaded)" come from an earlier read, not from this session.
+- **A parcel counted as RETRACED exits 0 and adds nothing to the changed count.** The class only
+  says the geometry cannot show a change. A rebuilt 2,000 zone by 20,000 parcel fixture took
+  7.3 seconds and exited 1, so the timing above and the exit code are for the fixture it came
+  from.
+- **One assertion per lead character covers the id, both zone labels and the reason together.**
+  A failure label does not say which column broke. Four checks per lead would say so.
+- **Interpreters re-run.** The 247 assertions were re-run on Windows with Python 3.13.2, 3.12
   and 3.9.25, and on Ubuntu with Python 3.12.3. Linux has no coverage module.
 - **No line is unreachable offline.** Coverage is complete. The tool has no network code and
   holds no credential, so there is no stub server. The self-test disables `socket.socket` while

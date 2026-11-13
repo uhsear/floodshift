@@ -452,6 +452,11 @@ def settle(old, new, subtype_field=DEFAULT_SUBTYPE_FIELD):
     share no identifier, or when their extents do not touch.
     """
     notes = []
+    if not subtype_field:
+        notes.append("NOTE      the zone subtype is turned off, so every zone "
+                     "is compared by its letter alone. A parcel that moves "
+                     "between shaded and unshaded zone X, or into or out of "
+                     "an AE floodway, reads STABLE")
     use_subtype = bool(subtype_field) and old.has_subtype and new.has_subtype
     if subtype_field and not use_subtype:
         note = ("NOTE      %s is missing or blank in at least one vintage, so "
@@ -1212,9 +1217,11 @@ def _self_test(tmp):
     check(r.old_key == ("X", minimal) and label(r.new_key).startswith("X ["),
           "and the result names both subtypes")
     o, n, notes = pair(same_shape_old, same_shape_new, subtype_field="")
-    check(one(o, n, 500, 500).cls == STABLE and notes == [],
-          "with the subtype turned off the same parcel is STABLE, said "
-          "nothing")
+    check(one(o, n, 500, 500).cls == STABLE and len(notes) == 1
+          and "subtype is turned off" in notes[0]
+          and "reads STABLE" in notes[0],
+          "with the subtype turned off the same parcel is STABLE, and the "
+          "run says the subtype is ignored  <-- pinned defect")
     o, n, notes = pair(old_world, same_shape_new)
     check(len(notes) == 1 and "left out of the zone key" in notes[0],
           "a subtype in one vintage only is left out of the key and the run "
@@ -1485,9 +1492,10 @@ def _self_test(tmp):
           "inside AE looks like the rest of AE without a subtype and the "
           "note names it  <-- pinned defect")
     o, n, notes = pair(old_world, old_world, "")
-    check(one(o, n, 1500, 500).cls == STABLE and notes == [],
-          "with the subtype turned off the same X parcel is STABLE, said "
-          "nothing")
+    check(one(o, n, 1500, 500).cls == STABLE and len(notes) == 1
+          and "subtype is turned off" in notes[0],
+          "with the subtype turned off the same X parcel is STABLE, and the "
+          "one note says the subtype is ignored")
     o, n, notes = pair([feat("AE", [rect(0, 0, 1000, 1000)], None),
                         feat("X", [rect(1000, 0, 2000, 1000)], None)],
                        [feat("AE", [rect(0, 0, 1015, 1000)], ""),
@@ -1903,10 +1911,14 @@ def _self_test(tmp):
     check(code == 0 and "VERDICT: 0 parcel(s) changed zone" in out
           and "no answer" not in out,
           "and --subtype-field with an empty value accepts the letter alone")
+    check("NOTE      the zone subtype is turned off" in out,
+          "and prints that note even when the answer is a clean 0  "
+          "<-- pinned defect")
     code, out, err = run_cli(base + ["--subtype-field", ""])
-    check(code == 1 and "is missing or blank in at least one vintage" not in out,
+    check(code == 1 and "is missing or blank in at least one vintage" not in out
+          and "NOTE      the zone subtype is turned off" in out,
           "--subtype-field with an empty value turns the subtype off, and "
-          "then there is nothing to say")
+          "the run prints one NOTE that it did  <-- pinned defect")
     code, out, err = run_cli(base + ["--change-distance", "60",
                                      "--units", "m"])
     check(code == 5 and "VERDICT: 2 parcel(s) changed zone" in out
@@ -2088,6 +2100,24 @@ def _self_test(tmp):
     check(code == 4 and "same coordinate system as the zones" in out,
           "parcels nowhere near the zones are exit 4 with a hint  "
           "<-- pinned defect")
+    # state plane scale: the same parcel in metres is 3.28 times smaller, so it
+    # lands outside every foot zone, as it does on real county data
+    off = (600000, 1800000)
+    sp_old = tmpfile("sp_old.json", json.dumps({"features": [
+        {"attributes": {"FLD_ZONE": "AH", "ZONE_SUBTY": "S"},
+         "geometry": {"rings": [
+            [[off[0], off[1]], [off[0], off[1] + 2000],
+             [off[0] + 2000, off[1] + 2000], [off[0] + 2000, off[1]],
+             [off[0], off[1]]]]}}]}))
+    code, out, err = run_cli([sp_old, sp_old, tmpfile(
+        "sp_feet.csv", "PARCEL_ID,X,Y\nC-1,601500,1801500\n")])
+    check(code == 0 and "STABLE     1" in out,
+          "a parcel in feet at state plane scale lands in its zone")
+    code, out, err = run_cli([sp_old, sp_old, tmpfile(
+        "sp_metres.csv", "PARCEL_ID,X,Y\nC-1,183000.0,549000.0\n")])
+    check(code == 4 and "NOTHING COMPARED" in out,
+          "the same parcel in metres is outside every foot zone and exits 4, "
+          "not a clean 0  <-- pinned defect")
     code, out, err = run_cli([old_json, new_json, tmpfile(
         "blank.csv", "PARCEL_ID,X,Y\nA,,\n")])
     check(code == 4 and "same coordinate system" not in out,
