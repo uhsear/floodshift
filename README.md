@@ -868,8 +868,10 @@ can exit 5 on this alone.
 - **A parcel file with the wrong columns echoes its first line.** The "columns not in the CSV"
   error prints the header it found, so a file that is not a parcel list shows its first line on
   stderr.
-- **A JSON file nested thousands of levels deep exits 70** with a `RecursionError` traceback and
-  not a refusal. It is a tool-fault code, never a false clean.
+- **A JSON file nested thousands of levels deep depends on the interpreter.** A file of 5000
+  nested `[` exits 70 with a `RecursionError` traceback on Windows Python 3.9, 3.12 and 3.13. On
+  Linux Python 3.12.3 the file parses and exits 3 with "not an Esri JSON feature set". Neither
+  outcome is a false clean.
 - **A crash prints a Python traceback to stderr.** The traceback holds local file paths and no
   credential. The exit code is 70.
 - **A parcel with a located coordinate can still count as not compared.** When every parcel is
@@ -885,8 +887,9 @@ can exit 5 on this alone.
 - **Each of the six lead characters is pinned by one assertion that covers all four text
   columns.** A failure label does not say which column broke. Each column is checked for each
   character, but there is not one assertion per field.
-- **A parcel CSV saved as UTF-16 exits 64 and does not name the encoding.** The message is
-  "columns not in the CSV" and shows the header as garbled text. Save the parcel file as UTF-8.
+- **A parcel CSV saved as UTF-16 does not name the encoding.** On Python 3.13 (Windows) and 3.12 (Linux) it exits
+  64 with "columns not in the CSV" and the header as garbled text. On Python 3.9 the csv module
+  rejects the NUL bytes and it exits 2 with "line contains NUL". Save the parcel file as UTF-8.
 - **An interrupted run is not mapped to a tool exit code.** Ctrl+C prints a Python traceback and
   ends with the interpreter's own status (130 in my Windows test), not 70.
 - **The live FEMA counts drift.** The subtype counts quoted above are dated 2026-11-11. A
